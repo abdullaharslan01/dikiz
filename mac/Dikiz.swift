@@ -156,16 +156,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         bridge.onChange = { [weak self] in self?.refresh(); self?.pollPhone() }
         bridge.vcamConfig = {
             let d = UserDefaults.standard
-            return "mirror=\(d.bool(forKey: "vcamMirror") ? 1 : 0);flip=\(d.bool(forKey: "vcamFlip") ? 1 : 0);rot=\(d.integer(forKey: "vcamRot"))"
+            func b(_ k: String) -> Int { d.bool(forKey: k) ? 1 : 0 }
+            return "mirror=\(b("vcamMirror"));flip=\(b("vcamFlip"));rot=\(d.integer(forKey: "vcamRot"))" +
+                ";follow=\(b("fxFollow"));blur=\(b("fxBlur"));beauty=\(b("fxBeauty"));light=\(b("fxLight"))" +
+                ";filter=\(d.string(forKey: "fxFilter") ?? "none")"
         }
         bridge.start()
         installCameraExtension()
         refresh()
         Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.pollPhone() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-            guard let self, self.bridge.code == nil, !self.warned else { return }
-            self.warnNotFound()
-        }
+        // Telefon yoksa araya girmeyiz: durum yalnızca menü çubuğundaki simgede görünür (üstü çizili göz).
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -212,6 +212,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         if vcamMirror || vcamFlip || vcamRot != 0 {
             menu.addItem(action("Yönü sıfırla", symbol: "arrow.counterclockwise", #selector(resetCam), key: ""))
         }
+
+        // ---- Efektler (Apple Vision + CoreImage, cihaz üzerinde) ----
+        menu.addItem(.separator())
+        menu.addItem(header("Efektler"))
+        menu.addItem(fx("Beni takip et", symbol: "person.crop.square", key: "fxFollow"))
+        menu.addItem(fx("Arka planı bulanıklaştır", symbol: "person.and.background.dotted", key: "fxBlur"))
+        menu.addItem(fx("Güzelleştirme", symbol: "sparkles", key: "fxBeauty"))
+        menu.addItem(fx("Işığı düzelt", symbol: "sun.max", key: "fxLight"))
+        let filterItem = NSMenuItem(title: "Filtre", action: nil, keyEquivalent: "")
+        filterItem.image = NSImage(systemSymbolName: "camera.filters", accessibilityDescription: nil)
+        let filterMenu = NSMenu()
+        let current = defaults.string(forKey: "fxFilter") ?? "none"
+        for (id, name) in [("none", "Yok"), ("warm", "Sıcak"), ("cool", "Soğuk"), ("vivid", "Canlı"), ("mono", "Siyah-beyaz"), ("cinema", "Sinema")] {
+            let it = NSMenuItem(title: name, action: #selector(setFilter(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = id
+            it.state = id == current ? .on : .off
+            filterMenu.addItem(it)
+        }
+        filterItem.submenu = filterMenu
+        if current != "none" { filterItem.title = "Filtre: " + (filterMenu.items.first { ($0.representedObject as? String) == current }?.title ?? "") }
+        menu.addItem(filterItem)
 
         // ---- Telefon: lens ve ışık ----
         if bridge.code != nil {
@@ -273,6 +295,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
     @objc func toggleFlip() { vcamFlip.toggle(); refresh() }
     @objc func rotateCam() { vcamRot = (vcamRot + 90) % 360; refresh() }
     @objc func resetCam() { vcamMirror = false; vcamFlip = false; vcamRot = 0; refresh() }
+
+    // ---- efektler (kalıcı) ----
+    private func fx(_ title: String, symbol: String, key: String) -> NSMenuItem {
+        let it = action(title, symbol: symbol, #selector(toggleFx(_:)), key: "", on: defaults.bool(forKey: key))
+        it.representedObject = key
+        return it
+    }
+    @objc func toggleFx(_ sender: NSMenuItem) {
+        guard let k = sender.representedObject as? String else { return }
+        defaults.set(!defaults.bool(forKey: k), forKey: k)
+        refresh()
+    }
+    @objc func setFilter(_ sender: NSMenuItem) {
+        defaults.set(sender.representedObject as? String ?? "none", forKey: "fxFilter")
+        refresh()
+    }
 
     // ---- telefon durumu (lens / ışık) ----
     var phoneLensStops: [Double] = []
