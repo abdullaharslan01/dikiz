@@ -229,14 +229,35 @@ private fun DikizScreen(
             }
         }
 
-        // ---- Alt: üç sade buton ----
-        Row(
+        // ---- Alt: lens seçici (kamera uygulaması gibi) + sade butonlar ----
+        Column(
             Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(bottom = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (state.zoomMin < 0.99f) {
-                RoundAction(Icons.Rounded.PanoramaWideAngle, "Geniş", active = state.zoom < 0.99f) { camera.toggleWide() }
+            if (state.lensStops.size > 1) {
+                Row(
+                    Modifier.clip(RoundedCornerShape(50)).background(Glass).padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    state.lensStops.forEach { z ->
+                        val on = kotlin.math.abs(z - state.zoom) < 0.06f
+                        Box(
+                            Modifier.size(44.dp).clip(CircleShape)
+                                .background(if (on) Color(0x33FFFFFF) else Color.Transparent)
+                                .clickable { camera.set("zoom", z.toString()) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                (if (z == z.toInt().toFloat()) z.toInt().toString() else "%.1f".format(z)) + if (on) "×" else "",
+                                color = if (on) Accent else Color.White,
+                                fontSize = if (on) 14.sp else 12.sp, fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.size(16.dp))
             }
+        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             if (state.cameras.size > 1) {
                 RoundAction(Icons.Rounded.Cameraswitch, "Çevir") { camera.switchFacing() }
             }
@@ -247,6 +268,7 @@ private fun DikizScreen(
             }
             RoundAction(Icons.Rounded.Bedtime, "Karart") { dimmed = true }
             RoundAction(Icons.Rounded.PowerSettingsNew, "Kapat", onClick = onStop)
+        }
         }
 
         state.error?.let {
