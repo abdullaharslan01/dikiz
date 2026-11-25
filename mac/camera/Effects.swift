@@ -1,4 +1,4 @@
-// Dikiz Kamera görüntü hattı: yön → kadraj (yüz takibi) → ışık → güzelleştirme → filtre → arka plan bulanıklığı.
+// Dikiz Kamera görüntü hattı: yön → kadraj → güzelleştirme → filtre → arka plan bulanıklığı.
 // Hepsi cihaz üzerinde: CoreImage (GPU) + Apple Vision (yüz ve kişi algılama).
 
 import Foundation
@@ -10,10 +10,8 @@ struct CamConfig: Equatable {
     var mirror = false
     var flip = false
     var rot = 0
-    var follow = false      // beni takip et (otomatik kadraj)
     var blur = false        // arka planı bulanıklaştır
-    var beauty = false      // güzelleştirme
-    var light = false       // ışığı düzelt
+    var beauty = false      // güzelleştirme (yalnızca yüz)
     var filter = "none"     // none | warm | cool | vivid | mono | cinema
 
     static func parse(_ s: String) -> CamConfig {
@@ -26,10 +24,8 @@ struct CamConfig: Equatable {
             case "mirror": c.mirror = v == "1"
             case "flip": c.flip = v == "1"
             case "rot": c.rot = Int(v) ?? 0
-            case "follow": c.follow = v == "1"
             case "blur": c.blur = v == "1"
             case "beauty": c.beauty = v == "1"
-            case "light": c.light = v == "1"
             case "filter": c.filter = v
             default: break
             }
@@ -42,15 +38,14 @@ final class VideoPipeline {
     let size: CGSize
     private let visionQueue = DispatchQueue(label: "dikiz.vision", qos: .userInitiated)
     private let lock = NSLock()
+    private let maskContext = CIContext(options: [.cacheIntermediates: false])
 
-    // Vision sonuçları (vision kuyruğunda yazılır, kilitle okunur)
-    private var faceBox: CGRect?          // yönlendirilmiş görüntü koordinatlarında
-    private var faceAt = Date.distantPast
-    private var mask: CIImage?            // çıkış (W×H) koordinatlarında kişi maskesi
+    // Vision sonuçları (çıkış W×H koordinatlarında)
+    private var faces: [CGRect] = []
+    private var facesAt = Date.distantPast
+    private var mask: CIImage?            // yumuşatılmış kişi maskesi
     private var faceBusy = false
     private var maskBusy = false
-
-    private var crop: CGRect?             // yumuşatılmış kadraj
     private var frameNo = 0
 
     private lazy var segmentation: VNGeneratePersonSegmentationRequest = {
@@ -74,20 +69,19 @@ final class VideoPipeline {
         if cfg.flip { img = normalized(img.transformed(by: CGAffineTransform(scaleX: 1, y: -1))) }
         let ext = img.extent
 
-        // 2) Kadraj
-        if cfg.follow { detectFace(in: img) }
-        let target = targetRegion(ext: ext, follow: cfg.follow)
+        // 2) Kadraj: yataysa doldur, dikse sığdır + aynı karenin bulanık hâli arka planda
         var out: CIImage
-        if let target {
-            let c = smooth(toward: target)
-            let s = W / c.width
+        let aspect = W / H
+        if abs(ext.width / ext.height - aspect) < 0.25 {
+            var cw = ext.width, ch = ext.width / aspect
+            if ch > ext.height { ch = ext.height; cw = ch * aspect }
+            let c = CGRect(x: (ext.width - cw) / 2, y: (ext.height - ch) / 2, width: cw, height: ch)
+            let s = W / cw
             out = img.cropped(to: c)
                 .transformed(by: CGAffineTransform(translationX: -c.minX, y: -c.minY))
                 .transformed(by: CGAffineTransform(scaleX: s, y: s))
                 .cropped(to: outRect)
         } else {
-            // Telefon dik ve takip kapalı: sığdır + aynı karenin bulanık hâli arka planda
-            crop = nil
             let fit = min(W / ext.width, H / ext.height)
             let fill = max(W / ext.width, H / ext.height) * 1.1
             let fg = img.transformed(by: CGAffineTransform(scaleX: fit, y: fit))
@@ -101,40 +95,23 @@ final class VideoPipeline {
             out = fgOff.composited(over: bgOff)
         }
 
-        // 3) Kişi maskesi (arka plan bulanıklığı ve güzelleştirme için)
-        if cfg.blur || cfg.beauty { updateMask(from: out) } else { setMask(nil) }
-        let m = currentMask()
+        // 3) Vision: kişi maskesi (bulanıklık) ve yüz konumu (güzelleştirme)
+        if cfg.blur { updateMask(from: out) } else { clearMask() }
+        if cfg.beauty { detectFaces(in: out) }
 
-        // 4) Işığı düzelt: gölgeleri aç, hafif pozlama
-        if cfg.light {
-            out = out.applyingFilter("CIHighlightShadowAdjust", parameters: ["inputShadowAmount": 0.75, "inputHighlightAmount": 0.95])
-                .applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: 0.18])
+        // 4) Güzelleştirme: yalnızca yüz bölgesinde, kenarları koruyarak yumuşatma
+        if cfg.beauty, let faceMask = currentFaceMask(outRect: outRect) {
+            out = beautify(out, faceMask: faceMask, outRect: outRect)
         }
 
-        // 5) Güzelleştirme: cildi yumuşat (yalnızca kişide), biraz canlılık
-        if cfg.beauty {
-            let soft = out.clampedToExtent()
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3.2])
-                .cropped(to: outRect)
-            let softHalf = soft.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0.5)])
-            var smoothed = softHalf.composited(over: out)
-            smoothed = smoothed.applyingFilter("CIColorControls", parameters: [
-                kCIInputBrightnessKey: 0.02, kCIInputSaturationKey: 1.06, kCIInputContrastKey: 1.0,
-            ])
-            if let m {
-                out = smoothed.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: out, kCIInputMaskImageKey: m])
-            } else {
-                out = smoothed
-            }
-        }
-
-        // 6) Filtre
+        // 5) Filtre
         out = applyFilter(cfg.filter, to: out)
 
-        // 7) Arka planı bulanıklaştır
-        if cfg.blur, let m {
+        // 6) Arka planı bulanıklaştır: kişi keskin kalır, arka plan yumuşak ve hafif sönük
+        if cfg.blur, let m = currentMask() {
             let bg = out.clampedToExtent()
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 22])
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 26])
+                .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.9, kCIInputBrightnessKey: -0.03])
                 .cropped(to: outRect)
             out = out.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: bg, kCIInputMaskImageKey: m])
         }
@@ -157,95 +134,111 @@ final class VideoPipeline {
         i.transformed(by: CGAffineTransform(translationX: -i.extent.minX, y: -i.extent.minY))
     }
 
-    // MARK: kadraj
+    // MARK: güzelleştirme
 
-    /// Çıkışın en-boy oranında kırpılacak bölge; nil = sığdır (telefon dik, takip kapalı).
-    private func targetRegion(ext: CGRect, follow: Bool) -> CGRect? {
-        let aspect = size.width / size.height
-        // Kareye sığan en büyük 16:9 bölge
-        var fullW = ext.width, fullH = ext.width / aspect
-        if fullH > ext.height { fullH = ext.height; fullW = fullH * aspect }
-        let full = CGRect(x: ext.midX - fullW / 2, y: ext.midY - fullH / 2, width: fullW, height: fullH)
-
-        if follow {
-            lock.lock(); let f = faceBox; let at = faceAt; lock.unlock()
-            if let f, Date().timeIntervalSince(at) < 2.0 {
-                // Baş + omuzlar: yüz yüksekliğinin ~3.4 katı, yüz kadrajın üst üçte birinde
-                var h = min(max(f.height * 3.4, ext.height * 0.35), fullH)
-                var w = h * aspect
-                if w > fullW { w = fullW; h = w / aspect }
-                var r = CGRect(x: f.midX - w / 2, y: f.midY - h * 0.62, width: w, height: h)
-                r.origin.x = min(max(r.minX, ext.minX), ext.maxX - w)
-                r.origin.y = min(max(r.minY, ext.minY), ext.maxY - h)
-                return r
-            }
-            return full
-        }
-        // Takip kapalı: görüntü zaten yataysa doldur, dikse sığdır
-        let close = abs(ext.width / ext.height - aspect) < 0.25
-        return close ? full : nil
+    /// Cilt yumuşatma: güçlü bulanık katman, keskin kenarlarda (göz, kaş, saç, ağız) azaltılır;
+    /// yalnızca yüzün etrafındaki yumuşak elips maskede uygulanır. Ardından hafif ışıltı ve sıcaklık.
+    private func beautify(_ img: CIImage, faceMask: CIImage, outRect: CGRect) -> CIImage {
+        let smooth = img.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 7])
+            .cropped(to: outRect)
+        // Kenar haritası: detay olan yerde yumuşatma azalır (gözler ve kaşlar net kalır)
+        let edges = img.applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 3.5])
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0])
+            .clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2])
+            .cropped(to: outRect)
+        let keepDetail = edges.applyingFilter("CIColorInvert")
+        // Yüz maskesi × detaysız bölge × %70 güç
+        let strength = keepDetail.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: faceMask])
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 0.7, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: 0.7, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0.7, w: 0),
+            ])
+        var out = smooth.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: img, kCIInputMaskImageKey: strength])
+        // Yüzde hafif ışıltı ve sıcaklık
+        let glow = out.applyingFilter("CIColorControls", parameters: [kCIInputBrightnessKey: 0.035, kCIInputSaturationKey: 1.04])
+            .applyingFilter("CITemperatureAndTint", parameters: [
+                "inputNeutral": CIVector(x: 6500, y: 0), "inputTargetNeutral": CIVector(x: 6100, y: 0)])
+        out = glow.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: out, kCIInputMaskImageKey: faceMask])
+        return out
     }
 
-    private func smooth(toward t: CGRect) -> CGRect {
-        guard let c = crop, abs(c.width - t.width) < t.width * 3 else { crop = t; return t }
-        let k: CGFloat = 0.10
-        let n = CGRect(x: c.minX + (t.minX - c.minX) * k, y: c.minY + (t.minY - c.minY) * k,
-                       width: c.width + (t.width - c.width) * k, height: c.height + (t.height - c.height) * k)
-        crop = n
-        return n
+    /// Algılanan yüzlerin etrafında yumuşak kenarlı elips maske (beyaz = yüz).
+    private func currentFaceMask(outRect: CGRect) -> CIImage? {
+        lock.lock(); let fs = faces; let at = facesAt; lock.unlock()
+        guard !fs.isEmpty, Date().timeIntervalSince(at) < 1.5 else { return nil }
+        var mask = CIImage(color: .black).cropped(to: outRect)
+        for f in fs {
+            let center = CIVector(x: f.midX, y: f.midY + f.height * 0.05)
+            let r = max(f.width, f.height) * 0.62
+            let spot = CIFilter(name: "CIRadialGradient", parameters: [
+                "inputCenter": center, "inputRadius0": r * 0.75, "inputRadius1": r * 1.15,
+                "inputColor0": CIColor.white, "inputColor1": CIColor.black,
+            ])!.outputImage!.cropped(to: outRect)
+            mask = spot.applyingFilter("CILightenBlendMode", parameters: [kCIInputBackgroundImageKey: mask])
+        }
+        return mask
     }
 
     // MARK: Vision
 
-    private func detectFace(in img: CIImage) {
-        guard frameNo % 4 == 0 else { return }
+    private func detectFaces(in out: CIImage) {
+        guard frameNo % 3 == 0 else { return }
         lock.lock(); if faceBusy { lock.unlock(); return }; faceBusy = true; lock.unlock()
-        let ext = img.extent
-        let small = img.transformed(by: CGAffineTransform(scaleX: 0.35, y: 0.35))
+        let ext = out.extent
+        let small = out.transformed(by: CGAffineTransform(scaleX: 0.4, y: 0.4))
         visionQueue.async { [weak self] in
             guard let self else { return }
             let req = VNDetectFaceRectanglesRequest()
             try? VNImageRequestHandler(ciImage: small, options: [:]).perform([req])
-            let faces = (req.results ?? []).map { $0.boundingBox }
-            var box: CGRect?
-            if let biggest = faces.max(by: { $0.width * $0.height < $1.width * $1.height }) {
-                // En büyük yüz + ona yakın diğer yüzler (iki kişi de kadraja girsin)
-                var u = biggest
-                for f in faces where f.height > biggest.height * 0.6 { u = u.union(f) }
-                box = CGRect(x: ext.minX + u.minX * ext.width, y: ext.minY + u.minY * ext.height,
-                             width: u.width * ext.width, height: u.height * ext.height)
+            let rects = (req.results ?? []).map {
+                CGRect(x: $0.boundingBox.minX * ext.width, y: $0.boundingBox.minY * ext.height,
+                       width: $0.boundingBox.width * ext.width, height: $0.boundingBox.height * ext.height)
             }
             self.lock.lock()
-            if let box { self.faceBox = box; self.faceAt = Date() }
+            if !rects.isEmpty { self.faces = rects; self.facesAt = Date() }
             self.faceBusy = false
             self.lock.unlock()
         }
     }
 
+    /// Kişi maskesi: Vision ile çıkarılır, kenarı yumuşatılır ve bir önceki maskeyle
+    /// harmanlanarak titremesi azaltılır.
     private func updateMask(from out: CIImage) {
         guard frameNo % 2 == 0 else { return }
-        lock.lock(); if maskBusy { lock.unlock(); return }; maskBusy = true; lock.unlock()
+        lock.lock(); if maskBusy { lock.unlock(); return }; maskBusy = true; let prev = mask; lock.unlock()
         let ext = out.extent
         let small = out.transformed(by: CGAffineTransform(scaleX: 0.5, y: 0.5))
         visionQueue.async { [weak self] in
             guard let self else { return }
-            let handler = VNImageRequestHandler(ciImage: small, options: [:])
-            try? handler.perform([self.segmentation])
-            var m: CIImage?
+            try? VNImageRequestHandler(ciImage: small, options: [:]).perform([self.segmentation])
+            var result: CIImage?
             if let pb = self.segmentation.results?.first?.pixelBuffer {
                 let mi = CIImage(cvPixelBuffer: pb)
-                m = mi.transformed(by: CGAffineTransform(scaleX: ext.width / mi.extent.width, y: ext.height / mi.extent.height))
-                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2])   // yumuşak kenar
+                var m = mi.transformed(by: CGAffineTransform(scaleX: ext.width / mi.extent.width, y: ext.height / mi.extent.height))
+                    .clampedToExtent()
+                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3.5])   // yumuşak kenar
                     .cropped(to: ext)
+                if let prev {
+                    m = m.applyingFilter("CIDissolveTransition", parameters: [
+                        kCIInputTargetImageKey: prev, kCIInputTimeKey: 0.35])               // zamanla yumuşatma
+                }
+                // Zincir uzamasın: küçük bir bitmap'e çiz, bir sonraki karede onu kullan
+                if let cg = self.maskContext.createCGImage(m, from: ext, format: .L8, colorSpace: nil) {
+                    result = CIImage(cgImage: cg)
+                }
             }
             self.lock.lock()
-            if m != nil { self.mask = m }
+            if let result { self.mask = result }
             self.maskBusy = false
             self.lock.unlock()
         }
     }
 
-    private func setMask(_ m: CIImage?) { lock.lock(); mask = m; lock.unlock() }
+    private func clearMask() { lock.lock(); mask = nil; lock.unlock() }
     private func currentMask() -> CIImage? { lock.lock(); defer { lock.unlock() }; return mask }
 
     // MARK: filtreler
@@ -254,18 +247,22 @@ final class VideoPipeline {
         switch name {
         case "warm":
             return i.applyingFilter("CITemperatureAndTint", parameters: [
-                "inputNeutral": CIVector(x: 6500, y: 0), "inputTargetNeutral": CIVector(x: 5200, y: 0)])
+                "inputNeutral": CIVector(x: 6500, y: 0), "inputTargetNeutral": CIVector(x: 5400, y: 0)])
+                .applyingFilter("CIVibrance", parameters: ["inputAmount": 0.15])
         case "cool":
             return i.applyingFilter("CITemperatureAndTint", parameters: [
-                "inputNeutral": CIVector(x: 6500, y: 0), "inputTargetNeutral": CIVector(x: 8000, y: 0)])
+                "inputNeutral": CIVector(x: 6500, y: 0), "inputTargetNeutral": CIVector(x: 7600, y: 0)])
         case "vivid":
-            return i.applyingFilter("CIVibrance", parameters: ["inputAmount": 0.6])
-                .applyingFilter("CIColorControls", parameters: [kCIInputContrastKey: 1.06])
+            return i.applyingFilter("CIVibrance", parameters: ["inputAmount": 0.5])
+                .applyingFilter("CIColorControls", parameters: [kCIInputContrastKey: 1.05])
         case "mono":
-            return i.applyingFilter("CIPhotoEffectNoir")
+            return i.applyingFilter("CIPhotoEffectMono")
+                .applyingFilter("CIColorControls", parameters: [kCIInputContrastKey: 1.08])
         case "cinema":
-            return i.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.85, kCIInputContrastKey: 1.12])
-                .applyingFilter("CIVignette", parameters: [kCIInputIntensityKey: 0.6, kCIInputRadiusKey: 1.4])
+            return i.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.85, kCIInputContrastKey: 1.1])
+                .applyingFilter("CITemperatureAndTint", parameters: [
+                    "inputNeutral": CIVector(x: 6500, y: 0), "inputTargetNeutral": CIVector(x: 6900, y: 10)])
+                .applyingFilter("CIVignette", parameters: [kCIInputIntensityKey: 0.5, kCIInputRadiusKey: 1.6])
         default:
             return i
         }
