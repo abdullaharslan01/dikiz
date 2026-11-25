@@ -1,0 +1,43 @@
+# XcodeGen tanımı: `xcodegen generate` → Dikiz.xcodeproj
+name: Dikiz
+options:
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.3"
+    CURRENT_PROJECT_VERSION: "4"
+    ENABLE_HARDENED_RUNTIME: YES
+targets:
+  Dikiz:
+    type: application
+    platform: macOS
+    sources:
+      - path: Dikiz.swift
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: Dikiz
+        PRODUCT_BUNDLE_IDENTIFIER: app.dikiz.mac
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_ENTITLEMENTS: Dikiz.entitlements
+    dependencies:
+      - target: DikizCamera
+        embed: true
+  DikizCamera:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: camera
+        excludes: ["*.plist", "*.entitlements"]
+    settings:
+      base:
+        PRODUCT_NAME: app.dikiz.mac.camera
+        PRODUCT_BUNDLE_IDENTIFIER: app.dikiz.mac.camera
+        INFOPLIST_FILE: camera/Info.plist
+        CODE_SIGN_ENTITLEMENTS: camera/DikizCamera.entitlements
+        SKIP_INSTALL: YES
