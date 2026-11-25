@@ -158,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
             let d = UserDefaults.standard
             func b(_ k: String) -> Int { d.bool(forKey: k) ? 1 : 0 }
             return "mirror=\(b("vcamMirror"));flip=\(b("vcamFlip"));rot=\(d.integer(forKey: "vcamRot"))" +
-                ";follow=\(b("fxFollow"));blur=\(b("fxBlur"));beauty=\(b("fxBeauty"));light=\(b("fxLight"))" +
+                ";blur=\(b("fxBlur"));beauty=\(b("fxBeauty"))" +
                 ";filter=\(d.string(forKey: "fxFilter") ?? "none")"
         }
         bridge.start()
@@ -216,10 +216,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         // ---- Efektler (Apple Vision + CoreImage, cihaz üzerinde) ----
         menu.addItem(.separator())
         menu.addItem(header("Efektler"))
-        menu.addItem(fx("Beni takip et", symbol: "person.crop.square", key: "fxFollow"))
         menu.addItem(fx("Arka planı bulanıklaştır", symbol: "person.and.background.dotted", key: "fxBlur"))
         menu.addItem(fx("Güzelleştirme", symbol: "sparkles", key: "fxBeauty"))
-        menu.addItem(fx("Işığı düzelt", symbol: "sun.max", key: "fxLight"))
         let filterItem = NSMenuItem(title: "Filtre", action: nil, keyEquivalent: "")
         filterItem.image = NSImage(systemSymbolName: "camera.filters", accessibilityDescription: nil)
         let filterMenu = NSMenu()
