@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Dikiz</title>
+<style>
+  :root{--bg:#0b0f14;--panel:rgba(17,24,39,.92);--line:#2a3442;--text:#e8edf3;--muted:#93a0b0;--accent:#f5b841;--on:#f5b841;--ok:#81c784}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;overflow:hidden}
+  #stage{position:fixed;inset:0;overflow:hidden;cursor:grab;touch-action:none;background:#000}
+  #stage.drag{cursor:grabbing}
+  .guide.g2{border-top-color:#ffab40}
+  #ov{position:absolute;transform-origin:50% 50%;pointer-events:none;user-select:none}
+  #img{position:absolute;transform-origin:50% 50%;user-select:none;-webkit-user-drag:none;pointer-events:none;image-rendering:auto}
+  #grid,#guides{position:absolute;inset:0;pointer-events:none}
+  #grid line{stroke:rgba(255,255,255,.35);stroke-width:1}
+  .guide{position:absolute;left:0;right:0;height:0;border-top:2px dashed #ff5252;pointer-events:auto;cursor:ns-resize}
+  .guide::before{content:"";position:absolute;left:0;right:0;top:-10px;height:20px}
+  .vguide{position:absolute;top:0;bottom:0;width:0;border-left:2px dashed #40c4ff;pointer-events:auto;cursor:ew-resize}
+  .vguide::before{content:"";position:absolute;top:0;bottom:0;left:-10px;width:20px}
+  #focus{position:absolute;width:70px;height:70px;margin:-35px 0 0 -35px;border:2px solid var(--accent);border-radius:8px;pointer-events:none;opacity:0;transition:opacity .4s}
+  #bar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:flex;gap:6px;flex-wrap:wrap;justify-content:center;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:8px;max-width:calc(100vw - 32px);backdrop-filter:blur(8px)}
+  button{appearance:none;border:1px solid var(--line);background:#1b2431;color:var(--text);border-radius:10px;padding:9px 12px;font:inherit;cursor:pointer;white-space:nowrap}
+  button:hover{border-color:#4b5869}
+  button.on{background:var(--on);color:#111;border-color:var(--on);font-weight:600}
+  button.big{font-size:15px;padding:10px 14px}
+  kbd{font:11px ui-monospace,monospace;opacity:.6;margin-left:4px}
+  #status{position:fixed;top:12px;left:12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px;color:var(--muted);font-size:12px}
+  #status b{color:var(--text);font-weight:600}
+  #status .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff5252;margin-right:6px}
+  #status .dot.live{background:var(--ok)}
+  #panel{position:fixed;top:0;right:0;bottom:0;width:340px;max-width:100vw;background:var(--panel);border-left:1px solid var(--line);padding:16px;overflow:auto;transform:translateX(100%);transition:transform .2s;backdrop-filter:blur(8px)}
+  #panel.open{transform:none}
+  #panel h3{margin:18px 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  #panel h3:first-child{margin-top:0}
+  label{display:block;margin:8px 0 2px;color:var(--muted);font-size:12px}
+  select,input[type=range]{width:100%}
+  select{background:#1b2431;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px}
+  .row{display:flex;gap:6px;flex-wrap:wrap}
+  .val{float:right;color:var(--text)}
+  .hint{color:var(--muted);font-size:12px;margin:6px 0}
+  #help{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:16px}
+  #help.open{display:flex}
+  #help .box{background:#111827;border:1px solid var(--line);border-radius:14px;padding:20px 24px;max-width:520px;width:100%}
+  #help td{padding:3px 12px 3px 0}
+  #frozen{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#ff5252;color:#fff;padding:6px 12px;border-radius:8px;font-weight:600;display:none}
+  body.hideui #bar,body.hideui #status{display:none}
+  /* sade alt çubuk */
+  #bar{flex-wrap:nowrap;gap:2px;padding:6px;border-radius:18px;transition:opacity .35s,transform .35s;overflow-x:auto}
+  #bar .sep{width:1px;align-self:stretch;margin:6px 4px;background:var(--line)}
+  .ib{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:58px;padding:7px 8px;border:0;background:transparent;border-radius:12px}
+  .ib i{font-style:normal;font-size:20px;line-height:1}
+  .ib span{font-size:11px;color:var(--muted)}
+  .ib:hover{background:#1b2431}
+  .ib.on{background:var(--on);color:#111}
+  .ib.on span{color:#111}
+  #status{transition:opacity .35s}
+  body.idle #bar{opacity:0;transform:translateX(-50%) translateY(12px);pointer-events:none}
+  body.idle #status{opacity:0}
+  body.idle #stage{cursor:none}
+  #panel .row button{flex:1 1 45%}
+  /* yön sihirbazı */
+  #wiz{position:fixed;left:0;right:0;top:16px;display:none;justify-content:center;padding:0 16px;pointer-events:none}
+  #wiz.open{display:flex}
+  #wiz .card{position:relative;pointer-events:auto;background:rgba(17,24,39,.94);border:1px solid var(--line);border-radius:18px;padding:18px 22px;max-width:520px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.5);backdrop-filter:blur(8px)}
+  #wiz .wt{font-size:18px;font-weight:700;margin-bottom:4px}
+  #wiz .wt small{font-weight:400;color:var(--muted);font-size:13px;margin-left:6px}
+  #wiz p{margin:6px 0 12px;color:#cfd6df}
+  #wiz .step{display:none}
+  #wiz .step.cur{display:block}
+  #wiz .wb{display:flex;gap:8px;flex-wrap:wrap}
+  #wiz .wb button{flex:1;padding:12px}
+  #wiz button.pri{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700}
+  #wiz button.big2{font-size:20px;padding:18px;font-weight:700}
+  #wiz .wx{position:absolute;top:10px;right:10px;border:0;background:transparent;color:var(--muted);padding:4px 8px}
+  /* Tabler ikonları */
+  .ti{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+  /* bölge seçici (Arka / Sol / Sağ) */
+  .seg{display:flex;align-items:center;background:#0e141c;border:1px solid var(--line);border-radius:12px;padding:3px;margin:0 4px}
+  .seg button{border:0;background:transparent;color:var(--muted);padding:8px 12px;border-radius:9px;font-weight:600}
+  .seg button.on{background:var(--accent);color:#111}
+  .seg small{font-weight:400;opacity:.6;margin-left:3px}
+  /* ön ayna (Mac kamerası) */
+  #front{position:fixed;top:0;right:0;bottom:0;width:38%;display:none;background:#000;border-left:2px solid var(--line);overflow:hidden}
+  #front video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  #front .tag{position:absolute;top:12px;right:12px;background:var(--panel);color:var(--muted);font-size:12px;padding:4px 10px;border-radius:8px}
+  body.split #stage{right:38%}
+  body.split #front{display:block}
+  body.split #bar{left:31%}
+  /* sesli komut göstergesi */
+  #vhud{position:fixed;top:12px;left:50%;transform:translateX(-50%);display:none;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:13px;color:var(--muted)}
+  #vhud.on{display:flex}
+  #vhud .mic{width:10px;height:10px;border-radius:50%;background:#ff5252;animation:pulse 1.4s infinite}
+  #vhud b{color:var(--text)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  body.split #vhud{left:31%}
+  #toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:#111827;border:1px solid var(--line);color:var(--text);padding:10px 16px;border-radius:12px;opacity:0;transition:opacity .3s;pointer-events:none;max-width:90vw;text-align:center}
+  #toast.show{opacity:1}
+  #cmdflash{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);font-size:34px;font-weight:800;color:#fff;text-shadow:0 2px 20px rgba(0,0,0,.8);opacity:0;transition:opacity .4s;pointer-events:none}
+  #cmdflash.show{opacity:1}
+  body.split #cmdflash{left:31%}
+  @media (max-width:600px){button{padding:8px 9px}kbd{display:none}.ib{min-width:48px}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <img id="img" alt="">
+  <img id="ov" alt="" style="display:none">
+  <svg width="0" height="0" style="position:absolute"><filter id="sharp"><feConvolveMatrix order="3" preserveAlpha="true" kernelMatrix="0 -1 0 -1 5 -1 0 -1 0"/></filter></svg>
+  <svg id="grid" style="display:none"></svg>
+  <div id="guides"></div>
+  <div id="focus"></div>
+</div>
+
+<div id="status"><span class="dot" id="dot"></span><span id="stxt">Bağlanıyor…</span></div>
+<div id="frozen">DONDURULDU — Boşluk ile devam</div>
+
+<!-- Tabler Icons v3.31.0 (MIT, github.com/tabler/tabler-icons) -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+<symbol id="ti-adjustments" viewBox="0 0 24 24"><path d="M4 10a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M6 4v4"/><path d="M6 12v8"/><path d="M10 16a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M12 4v10"/><path d="M12 18v2"/><path d="M16 7a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M18 4v1"/><path d="M18 9v11"/></symbol>
+<symbol id="ti-arrows-left-right" viewBox="0 0 24 24"><path d="M21 17l-18 0"/><path d="M6 10l-3 -3l3 -3"/><path d="M3 7l18 0"/><path d="M18 20l3 -3l-3 -3"/></symbol>
+<symbol id="ti-bulb" viewBox="0 0 24 24"><path d="M3 12h1m8 -9v1m8 8h1m-15.4 -6.4l.7 .7m12.1 -.7l-.7 .7"/><path d="M9 16a5 5 0 1 1 6 0a3.5 3.5 0 0 0 -1 3a2 2 0 0 1 -4 0a3.5 3.5 0 0 0 -1 -3"/><path d="M9.7 17l4.6 0"/></symbol>
+<symbol id="ti-camera" viewBox="0 0 24 24"><path d="M5 7h1a2 2 0 0 0 2 -2a1 1 0 0 1 1 -1h6a1 1 0 0 1 1 1a2 2 0 0 0 2 2h1a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M9 13a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/></symbol>
+<symbol id="ti-compass" viewBox="0 0 24 24"><path d="M8 16l2 -6l6 -2l-2 6l-6 2"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 3l0 2"/><path d="M12 19l0 2"/><path d="M3 12l2 0"/><path d="M19 12l2 0"/></symbol>
+<symbol id="ti-device-laptop" viewBox="0 0 24 24"><path d="M3 19l18 0"/><path d="M5 6m0 1a1 1 0 0 1 1 -1h12a1 1 0 0 1 1 1v8a1 1 0 0 1 -1 1h-12a1 1 0 0 1 -1 -1z"/></symbol>
+<symbol id="ti-flip-vertical" viewBox="0 0 24 24"><path d="M12 3l0 18"/><path d="M16 7l0 10l5 0l-5 -10"/><path d="M8 7l0 10l-5 0l5 -10"/></symbol>
+<symbol id="ti-line-dashed" viewBox="0 0 24 24"><path d="M5 12h2"/><path d="M17 12h2"/><path d="M11 12h2"/></symbol>
+<symbol id="ti-microphone-off" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M9 5a3 3 0 0 1 6 0v5a3 3 0 0 1 -.13 .874m-2 2a3 3 0 0 1 -3.87 -2.872v-1"/><path d="M5 10a7 7 0 0 0 10.846 5.85m2 -2a6.967 6.967 0 0 0 1.152 -3.85"/><path d="M8 21l8 0"/><path d="M12 17l0 4"/></symbol>
+<symbol id="ti-microphone" viewBox="0 0 24 24"><path d="M9 2m0 3a3 3 0 0 1 3 -3h0a3 3 0 0 1 3 3v5a3 3 0 0 1 -3 3h0a3 3 0 0 1 -3 -3z"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M8 21l8 0"/><path d="M12 17l0 4"/></symbol>
+<symbol id="ti-player-pause" viewBox="0 0 24 24"><path d="M6 5m0 1a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1z"/><path d="M14 5m0 1a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1z"/></symbol>
+<symbol id="ti-player-play" viewBox="0 0 24 24"><path d="M7 4v16l13 -8z"/></symbol>
+<symbol id="ti-rotate-clockwise" viewBox="0 0 24 24"><path d="M4.05 11a8 8 0 1 1 .5 4m-.5 5v-5h5"/></symbol>
+</svg>
+
+<div id="front"><video id="fv" autoplay muted playsinline></video><div class="tag">Ön · Mac kamerası</div></div>
+<div id="vhud"><span class="mic"></span><span>Dinliyorum</span><b id="vlast"></b></div>
+<div id="toast"></div>
+<div id="cmdflash"></div>
+
+<div id="bar">
+  <div class="seg" title="Bölge: her bölgenin yakınlaştırma ve kaydırması ayrı hatırlanır (1 / 2 / 3)">
+    <button id="r1">Arka<small>1</small></button><button id="r2">Sol<small>2</small></button><button id="r3">Sağ<small>3</small></button>
+  </div>
+  <span class="sep"></span>
+  <button class="ib" id="bWiz" title="Yön ayarı: sağ-sol ve dikey yönü iki soruda ayarla"><svg class="ti"><use href="#ti-compass"/></svg><span>Yön</span></button>
+  <button class="ib" id="bMirror" title="Sağ-sol ters çevir (M)"><svg class="ti"><use href="#ti-arrows-left-right"/></svg><span>Ayna</span></button>
+  <button class="ib" id="bRotR" title="90° döndür (R)"><svg class="ti"><use href="#ti-rotate-clockwise"/></svg><span>Döndür</span></button>
+  <span class="sep"></span>
+  <button class="ib" id="bGuide" title="Hizalama çizgileri (L)"><svg class="ti"><use href="#ti-line-dashed"/></svg><span>Çizgi</span></button>
+  <button class="ib" id="bSym" title="Simetri aynası (Y)"><svg class="ti"><use href="#ti-flip-vertical"/></svg><span>Simetri</span></button>
+  <span class="sep"></span>
+  <button class="ib" id="bFreeze" title="Dondur (Boşluk) — sesle: “dondur” / “devam”"><svg class="ti"><use href="#ti-player-pause"/></svg><span>Dondur</span></button>
+  <button class="ib" id="bSave" title="Fotoğraf kaydet (S) — sesle: “fotoğraf”"><svg class="ti"><use href="#ti-camera"/></svg><span>Kaydet</span></button>
+  <span class="sep"></span>
+  <button class="ib" id="bTorchBar" title="Telefonun ışığı: gölgeli yerleri aydınlatır (T) — sesle: “ışık”"><svg class="ti"><use href="#ti-bulb"/></svg><span>Işık</span></button>
+  <button class="ib" id="bFront" title="Ön ayna: Mac kamerasıyla yüzünü ve yanları da göster (W) — sesle: “ön”"><svg class="ti"><use href="#ti-device-laptop"/></svg><span>Ön ayna</span></button>
+  <button class="ib" id="bVoice" title="Sesli komut (V): eller serbest"><svg class="ti"><use href="#ti-microphone"/></svg><span>Ses</span></button>
+  <span class="sep"></span>
+  <button class="ib" id="bPanel" title="Diğer araçlar ve ayarlar"><svg class="ti"><use href="#ti-adjustments"/></svg><span>Daha</span></button>
+</div>
+
+<div id="wiz"><div class="card">
+  <div class="step" id="w1">
+    <div class="wt">Yön ayarı <small>1/2</small></div>
+    <p>Telefonu yerleştir. Görüntüde <b>başın yukarıda</b> mı duruyor?</p>
+    <div class="wb">
+      <button class="pri" id="w1ok">Evet, düz</button>
+      <button id="w1flip">Baş aşağı</button>
+      <button id="w1rot">Yan duruyor ⟳</button>
+    </div>
+  </div>
+  <div class="step" id="w2">
+    <div class="wt">Yön ayarı <small>2/2</small></div>
+    <p><b>Sağ elini</b> kaldır (ya da sağ kulağını tut). Görüntüde elin hangi tarafta?</p>
+    <div class="wb">
+      <button class="big2" id="w2left">◀ Solda</button>
+      <button class="big2" id="w2right">Sağda ▶</button>
+    </div>
+    <p class="hint">Klavyede ← / → da olur.</p>
+  </div>
+  <div class="step" id="w3">
+    <div class="wt">Hazır ✓</div>
+    <p>Artık sağa gittiğinde görüntüde de sağa gidecek. Bu ayar bu tarayıcıda hatırlanır; telefonun yerini değiştirirsen <b>🧭 Yön</b>'e tekrar bas.</p>
+  </div>
+  <button class="wx" id="wClose" title="Kapat">✕</button>
+</div></div>
+
+<div id="panel">
+  <h3>Araçlar</h3>
+  <div class="row">
+    <button id="bFlipV" title="Dikey çevir (V)">↕ Dikey çevir</button>
+    <button id="bRotL" title="90° sola (Shift+R)">⟲ 90° sola</button>
+    <button id="bGrid" title="Izgara (G)">▦ Izgara</button>
+    <button id="bRef" title="Referans kare yakala / kapat (B)">◐ Referans</button>
+    <button id="bSharp" title="Keskinleştir (K)">✦ Keskin</button>
+    <button id="bReset" title="Görünümü sıfırla (0)">Sıfırla</button>
+    <button id="bFull" title="Tam ekran (F)">⛶ Tam ekran</button>
+    <button id="bHelp" title="Kısayollar (?)">⌨ Kısayollar</button>
+  </div>
+
+  <h3>Görünüm (bu bilgisayar)</h3>
+  <label>Eğim düzeltme <span class="val" id="vFine">0°</span></label>
+  <input type="range" id="fine" min="-45" max="45" step="0.5" value="0">
+  <label>Yakınlaştırma (dijital) <span class="val" id="vZoom">1.0×</span></label>
+  <input type="range" id="zoom" min="1" max="8" step="0.05" value="1">
+  <label>Parlaklık <span class="val" id="vBr">100%</span></label>
+  <input type="range" id="br" min="50" max="200" step="5" value="100">
+  <label>Kontrast <span class="val" id="vCt">100%</span></label>
+  <input type="range" id="ct" min="50" max="200" step="5" value="100">
+  <label>Simetri / referans saydamlığı <span class="val" id="vOp">50%</span></label>
+  <input type="range" id="op" min="10" max="90" step="5" value="50">
+  <p class="hint"><b>Simetri:</b> mavi dikey çizgiyi ortaya sürükle. İki taraf eşitse görüntü net, değilse "hayalet" kenar görürsün. <b>Referans:</b> bir tarafı bitirince yakala, sonra karşılaştır.</p>
+  <p class="hint">Fareyle sürükle = kaydır · Tekerlek = yakınlaştır · Tıkla = oraya odakla · Çift tık = sıfırla</p>
+
+  <h3>Kamera (telefon)</h3>
+  <label>Lens</label>
+  <div class="row" id="lensStops"></div>
+  <p class="hint"><b>Geniş</b> lensle başla: telefonu tam doğru açıya koyman gerekmez, burada yakınlaştırıp kaydırırsın. Telefon yakındaysa <b>tele</b> lens daha keskin detay verir.</p>
+  <label>Kamera</label>
+  <select id="selCam"></select>
+  <label>Odak <span class="val" id="vMf">Otomatik</span></label>
+  <input type="range" id="mf" min="0" max="10" step="0.1" value="0">
+  <div class="row">
+    <button id="bMfAuto">Otomatik odak</button>
+    <button id="bAe" title="Pozlamayı kilitle: kafanı çevirince parlaklık oynamaz">Pozlama kilidi</button>
+    <button id="bAwb" title="Renk dengesini kilitle: cilt rengi sabit kalır">Renk kilidi</button>
+    <button id="bHq" title="Kenar keskinleştirme + gürültü azaltma en yüksek kalitede">Detay modu</button>
+  </div>
+  <p class="hint">Telefonu yerleştirip görüntüye bir kez tıkla (odak oraya kilitlenir), ya da kaydırıcıyla elle ayarla. Kafanı çevirdikçe görüntü kararıp aydınlanıyorsa <b>Pozlama kilidi</b>'ni aç.</p>
+  <label>Çözünürlük</label>
+  <select id="selSize"></select>
+  <label>Optik/kamera zoom <span class="val" id="vCz">1.0×</span></label>
+  <input type="range" id="cz" min="1" max="1" step="0.05" value="1">
+  <label>Pozlama <span class="val" id="vEv">0</span></label>
+  <input type="range" id="ev" min="0" max="0" step="1" value="0">
+  <label>JPEG kalitesi <span class="val" id="vQ">80</span></label>
+  <input type="range" id="q" min="40" max="100" step="5" value="80">
+  <label>Maks. FPS</label>
+  <select id="selFps"><option>10</option><option>15</option><option>20</option><option>24</option><option>30</option><option id="opt60" value="60">60 (en akıcı)</option></select>
+  <div class="row" style="margin-top:10px">
+    <button id="bTorch">Fener</button>
+    <button id="bPrev">Telefon önizlemesi</button>
+  </div>
+  <p class="hint">En yüksek çözünürlük gerekirse telefon önizlemesini kapat. Görüntü gecikirse çözünürlüğü veya kaliteyi düşür.</p>
+</div>
+
+<div id="help"><div class="box">
+  <h2 style="margin-top:0">Kısayollar</h2>
+  <table>
+    <tr><td><b>M</b></td><td>Ayna (sağ-sol ters)</td></tr>
+    <tr><td><b>1</b> / <b>2</b> / <b>3</b></td><td>Bölge: Arka / Sol / Sağ (her birinin yakınlaştırması ayrı hatırlanır)</td></tr>
+    <tr><td><b>V</b></td><td>Sesli komut aç/kapat</td></tr>
+    <tr><td><b>W</b></td><td>Ön ayna (Mac kamerası) aç/kapat</td></tr>
+    <tr><td><b>Shift+V</b></td><td>Dikey çevir</td></tr>
+    <tr><td><b>R</b> / <b>Shift+R</b></td><td>90° sağa / sola döndür</td></tr>
+    <tr><td><b>[</b> / <b>]</b></td><td>Eğimi 1° düzelt</td></tr>
+    <tr><td><b>+</b> / <b>−</b>, tekerlek</td><td>Yakınlaştır / uzaklaştır</td></tr>
+    <tr><td>Oklar, sürükle</td><td>Kaydır</td></tr>
+    <tr><td>Tıkla</td><td>O noktaya odakla (kilitler)</td></tr>
+    <tr><td><b>A</b></td><td>Otomatik odağa dön</td></tr>
+    <tr><td><b>G</b> / <b>L</b></td><td>Izgara / hizalama çizgileri (kırmızı = ana hat, turuncu = geçiş, mavi = orta)</td></tr>
+    <tr><td><b>Y</b></td><td>Simetri aynası (mavi çizgi etrafında)</td></tr>
+    <tr><td><b>B</b></td><td>Referans kare yakala / kapat</td></tr>
+    <tr><td><b>K</b></td><td>Keskinleştir</td></tr>
+    <tr><td><b>Boşluk</b></td><td>Dondur</td></tr>
+    <tr><td><b>S</b></td><td>Fotoğraf kaydet</td></tr>
+    <tr><td><b>T</b></td><td>Fener</td></tr>
+    <tr><td><b>F</b> / <b>H</b></td><td>Tam ekran / arayüzü gizle</td></tr>
+    <tr><td><b>0</b>, çift tık</td><td>Görünümü sıfırla</td></tr>
+  </table>
+  <p class="hint"><b>Görüntü ters mi geliyor?</b> Alttaki <b>🧭 Yön</b>'e bas; iki soruda doğru ayarı kendisi yapar.</p>
+  <button id="bHelpClose">Kapat</button>
+</div></div>
+
+<script>
+(() => {
+  const BASE = '/__CODE__';
+  const $ = id => document.getElementById(id);
+  const stage = $('stage'), img = $('img');
+
+  // ---------- görünüm durumu (tarayıcıda saklanır) ----------
+  const DEF = {r:0, fine:0, fh:false, fv:false, z:1, px:0, py:0, grid:false, guide:false, gy:0.5, gy2:0.65, gx:0.5,
+               br:100, ct:100, ovMode:'off', op:50, sharp:false, calibrated:false,
+               region:1, regions:{}, front:false, voice:false};
+  let V = Object.assign({}, DEF);
+  try { Object.assign(V, JSON.parse(localStorage.getItem('dikiz-view') || '{}')); } catch (e) {}
+  if (V.ovMode === 'ref') V.ovMode = 'off';   // referans kare yeniden yüklemede saklanmaz
+  const ov = document.getElementById('ov');
+  let refData = null;
+  const save = () => {
+    // Her bölgenin (Arka / Sol / Sağ) yakınlaştırma-kaydırma ayarını ayrı tut
+    V.regions[V.region] = {z: V.z, px: V.px, py: V.py, fine: V.fine};
+    try { localStorage.setItem('dikiz-view', JSON.stringify(V)); } catch (e) {}
+  };
+
+  let S = {};          // telefondan gelen durum
+  let frozen = false;
+
+  // ---------- akış ----------
+  let retryTimer = null;
+  function connect() {
+    clearTimeout(retryTimer);
+    img.src = BASE + '/stream?t=' + Date.now();
+  }
+  img.addEventListener('load', () => { layout(); });
+  img.addEventListener('error', () => {
+    if (frozen) return;
+    setStatus(false, 'Bağlantı koptu, yeniden deneniyor…');
+    retryTimer = setTimeout(connect, 1500);
+  });
+  connect();
+
+  // MJPEG'de "load" her karede tetiklenmeyebilir; boyut değişimini düzenli kontrol et
+  let lastW = 0, lastH = 0;
+  (function watch() {
+    if (img.naturalWidth !== lastW || img.naturalHeight !== lastH) { lastW = img.naturalWidth; lastH = img.naturalHeight; layout(); }
+    requestAnimationFrame(watch);
+  })();
+  window.addEventListener('resize', layout);
+
+  // ---------- dönüşüm ----------
+  const rad = d => d * Math.PI / 180;
+  const rot90 = () => (((S.rotation || 0) + V.r * 90) % 360 + 360) % 360;
+  const totalRot = () => rot90() + V.fine;
+
+  function geom() {
+    const W = img.naturalWidth || 1, H = img.naturalHeight || 1;
+    const cw = stage.clientWidth, ch = stage.clientHeight;
+    const sideways = rot90() % 180 !== 0;
+    const bw = sideways ? H : W, bh = sideways ? W : H;
+    const fit = Math.min(cw / bw, ch / bh);
+    const s = fit * V.z;
+    return {W, H, cw, ch, s, sx: (V.fh ? -1 : 1) * s, sy: (V.fv ? -1 : 1) * s};
+  }
+
+  function layout() {
+    const g = geom();
+    if (!img.naturalWidth) return;
+    img.style.width = g.W + 'px';
+    img.style.height = g.H + 'px';
+    img.style.left = (g.cw - g.W) / 2 + 'px';
+    img.style.top = (g.ch - g.H) / 2 + 'px';
+    const mainT = `translate(${V.px}px,${V.py}px) scale(${g.sx},${g.sy}) rotate(${totalRot()}deg)`;
+    const filt = `${V.sharp ? 'url(#sharp) ' : ''}brightness(${V.br}%) contrast(${V.ct}%)`;
+    img.style.transform = mainT;
+    img.style.filter = filt;
+    // Kaplama: simetri (mavi çizgi etrafında aynalanmış) veya referans kare
+    if (V.ovMode !== 'off') {
+      const W2 = V.ovMode === 'ref' ? (ov.naturalWidth || g.W) : g.W, H2 = V.ovMode === 'ref' ? (ov.naturalHeight || g.H) : g.H;
+      ov.style.display = '';
+      ov.style.width = W2 + 'px'; ov.style.height = H2 + 'px';
+      ov.style.left = (g.cw - W2) / 2 + 'px'; ov.style.top = (g.ch - H2) / 2 + 'px';
+      ov.style.opacity = V.op / 100;
+      ov.style.filter = filt;
+      const axis = V.gx * g.cw - g.cw / 2;
+      ov.style.transform = V.ovMode === 'sym' ? `translate(${2 * axis}px,0px) scale(-1,1) ${mainT}` : mainT;
+    } else ov.style.display = 'none';
+    drawGrid(); drawGuides(); syncUI();
+  }
+
+  function setOverlay(mode) {
+    V.ovMode = mode; save();
+    if (mode === 'sym') {
+      ov.src = frozen ? img.src : BASE + '/stream?o=1&t=' + Date.now();
+      if (!V.guide) V.guide = true;   // ekseni görebilmek için çizgileri aç
+    } else if (mode === 'ref' && refData) {
+      ov.src = refData;
+    } else {
+      ov.removeAttribute('src'); ov.src = '';   // ikinci akış bağlantısını kapat
+    }
+    layout();
+  }
+  ov.addEventListener('load', layout);
+  ov.addEventListener('error', () => { if (V.ovMode === 'sym' && !frozen) setTimeout(() => setOverlay('sym'), 1500); });
+
+  // Ekran noktası -> ham kamera karesinde 0..1 koordinat (odaklama için)
+  function toRaw(clientX, clientY) {
+    const g = geom(), r = stage.getBoundingClientRect();
+    let x = (clientX - r.left - g.cw / 2 - V.px) / g.sx;
+    let y = (clientY - r.top - g.ch / 2 - V.py) / g.sy;
+    const a = -rad(totalRot());
+    const rx = x * Math.cos(a) - y * Math.sin(a), ry = x * Math.sin(a) + y * Math.cos(a);
+    return [(rx + g.W / 2) / g.W, (ry + g.H / 2) / g.H];
+  }
+
+  function zoomAt(newZ, clientX, clientY) {
+    newZ = Math.max(1, Math.min(8, newZ));
+    const r = stage.getBoundingClientRect();
+    const qx = (clientX ?? r.left + r.width / 2) - r.left - r.width / 2;
+    const qy = (clientY ?? r.top + r.height / 2) - r.top - r.height / 2;
+    const k = newZ / V.z;
+    V.px = qx - k * (qx - V.px);
+    V.py = qy - k * (qy - V.py);
+    V.z = newZ;
+    if (V.z === 1) { V.px = 0; V.py = 0; }
+    save(); layout();
+  }
+
+  // ---------- ızgara & kılavuz ----------
+  const grid = $('grid'), guides = $('guides');
+  function drawGrid() {
+    grid.style.display = V.grid ? '' : 'none';
+    if (!V.grid) return;
+    const w = stage.clientWidth, h = stage.clientHeight;
+    let s = '';
+    for (const f of [1/3, 2/3]) {
+      s += `<line x1="${w*f}" y1="0" x2="${w*f}" y2="${h}"/><line x1="0" y1="${h*f}" x2="${w}" y2="${h*f}"/>`;
+    }
+    grid.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    grid.innerHTML = s;
+  }
+  function drawGuides() {
+    if (!V.guide) { guides.innerHTML = ''; return; }
+    if (!guides.firstChild) {
+      guides.innerHTML = '<div class="guide" id="gH" title="Ana hat"></div><div class="guide g2" id="gH2" title="Geçiş (fade) bölgesi"></div><div class="vguide" id="gV" title="Orta / simetri ekseni"></div>';
+      dragLine($('gH'), 'gy'); dragLine($('gH2'), 'gy2'); dragLine($('gV'), 'gx');
+    }
+    $('gH').style.top = (V.gy * 100) + '%';
+    $('gH2').style.top = (V.gy2 * 100) + '%';
+    $('gV').style.left = (V.gx * 100) + '%';
+  }
+  function dragLine(el, key) {
+    el.addEventListener('pointerdown', e => {
+      e.stopPropagation(); el.setPointerCapture(e.pointerId);
+      const move = ev => {
+        const r = stage.getBoundingClientRect();
+        V[key] = key !== 'gx' ? Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height))
+                              : Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+        if (key === 'gx' && V.ovMode === 'sym') layout(); else drawGuides();
+      };
+      const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); save(); };
+      el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
+    });
+  }
+
+  // ---------- fare / dokunma ----------
+  let drag = null;
+  stage.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    stage.setPointerCapture(e.pointerId);
+    drag = {x: e.clientX, y: e.clientY, px: V.px, py: V.py, moved: false};
+    stage.classList.add('drag');
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    if (drag.moved) { V.px = drag.px + dx; V.py = drag.py + dy; layout(); }
+  });
+  stage.addEventListener('pointerup', e => {
+    stage.classList.remove('drag');
+    if (!drag) return;
+    if (!drag.moved) focusAt(e.clientX, e.clientY); else save();
+    drag = null;
+  });
+  stage.addEventListener('dblclick', () => resetView());
+  stage.addEventListener('wheel', e => {
+    e.preventDefault();
+    zoomAt(V.z * Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+  }, {passive: false});
+
+  function focusAt(cx, cy) {
+    const [nx, ny] = toRaw(cx, cy);
+    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+    api({focus: nx.toFixed(4) + ',' + ny.toFixed(4)});
+    const f = $('focus'), r = stage.getBoundingClientRect();
+    f.style.left = (cx - r.left) + 'px'; f.style.top = (cy - r.top) + 'px';
+    f.style.opacity = 1; setTimeout(() => f.style.opacity = 0, 900);
+  }
+
+  // ---------- eylemler ----------
+  const act = {
+    mirror() { V.fh = !V.fh; V.px = -V.px; save(); layout(); },
+    flipV() { V.fv = !V.fv; V.py = -V.py; save(); layout(); },
+    rotR() { V.r = (V.r + 1) % 4; save(); layout(); },
+    rotL() { V.r = (V.r + 3) % 4; save(); layout(); },
+    grid() { V.grid = !V.grid; save(); layout(); },
+    guide() { V.guide = !V.guide; save(); layout(); },
+    freeze() {
+      frozen = !frozen;
+      $('frozen').style.display = frozen ? 'block' : 'none';
+      if (frozen) {
+        // Mevcut kareyi canvas'a kopyala, akışı kes
+        try {
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth; c.height = img.naturalHeight;
+          c.getContext('2d').drawImage(img, 0, 0);
+          img.src = c.toDataURL('image/jpeg', 0.95);
+        } catch (e) { img.src = BASE + '/snapshot.jpg?t=' + Date.now(); }
+      } else connect();
+      if (V.ovMode === 'sym') setOverlay('sym');
+      syncUI();
+    },
+    sym() { setOverlay(V.ovMode === 'sym' ? 'off' : 'sym'); },
+    ref() {
+      if (V.ovMode === 'ref') return setOverlay('off');
+      try {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        refData = c.toDataURL('image/jpeg', 0.9);
+        setOverlay('ref');
+      } catch (e) {
+        fetch(BASE + '/snapshot.jpg?t=' + Date.now()).then(r => r.blob()).then(b => { refData = URL.createObjectURL(b); setOverlay('ref'); });
+      }
+    },
+    sharp() { V.sharp = !V.sharp; save(); layout(); },
+    async save() {
+      // Ham kareyi al, görünümdeki döndürme + aynayı uygula
+      const src = new Image();
+      src.src = frozen ? img.src : BASE + '/snapshot.jpg?t=' + Date.now();
+      await src.decode().catch(() => {});
+      if (!src.naturalWidth) return;
+      const W = src.naturalWidth, H = src.naturalHeight, a = rad(totalRot());
+      const bw = Math.abs(W * Math.cos(a)) + Math.abs(H * Math.sin(a));
+      const bh = Math.abs(W * Math.sin(a)) + Math.abs(H * Math.cos(a));
+      const c = document.createElement('canvas');
+      c.width = Math.round(bw); c.height = Math.round(bh);
+      const x = c.getContext('2d');
+      x.filter = `brightness(${V.br}%) contrast(${V.ct}%)`;
+      x.translate(c.width / 2, c.height / 2);
+      x.scale(V.fh ? -1 : 1, V.fv ? -1 : 1);
+      x.rotate(a);
+      x.drawImage(src, -W / 2, -H / 2);
+      const d = new Date(), p = n => String(n).padStart(2, '0');
+      const name = `dikiz-${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`;
+      c.toBlob(b => {
+        const u = URL.createObjectURL(b), l = document.createElement('a');
+        l.href = u; l.download = name; l.click(); setTimeout(() => URL.revokeObjectURL(u), 2000);
+      }, 'image/jpeg', 0.95);
+    },
+    full() {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen).call(document.documentElement);
+    },
+    panel() { $('panel').classList.toggle('open'); },
+    help() { $('help').classList.toggle('open'); },
+    torch() { api({torch: S.torch ? 0 : 1}); },
+    af() { api({autofocus: 1}); },
+  };
+  function resetView() { Object.assign(V, {z: 1, px: 0, py: 0, fine: 0}); save(); layout(); }
+
+  $('bMirror').onclick = act.mirror; $('bFlipV').onclick = act.flipV;
+  $('bRotR').onclick = act.rotR; $('bRotL').onclick = act.rotL;
+  $('bGrid').onclick = act.grid; $('bGuide').onclick = act.guide;
+  $('bFreeze').onclick = act.freeze; $('bSave').onclick = act.save;
+  $('bReset').onclick = resetView; $('bFull').onclick = act.full;
+  $('bPanel').onclick = act.panel; $('bHelp').onclick = act.help; $('bHelpClose').onclick = act.help;
+  $('bTorch').onclick = act.torch;
+  $('bSym').onclick = act.sym; $('bRef').onclick = act.ref; $('bSharp').onclick = act.sharp;
+  $('bPrev').onclick = () => api({preview: S.phonePreview ? 0 : 1});
+  $('bTorchBar').onclick = act.torch;
+  $('bFront').onclick = () => frontToggle();
+  $('bVoice').onclick = () => voiceToggle();
+  [1, 2, 3].forEach(n => $('r' + n).onclick = () => setRegion(n));
+
+  // ---------- gelişmiş kamera (lens, odak, kilitler) ----------
+  function lensName(z) {
+    if (z < 0.95) return 'Geniş';
+    if (Math.abs(z - 1) < 0.05) return 'Ana';
+    return 'Tele';
+  }
+  function renderCameraPro(s) {
+    const box = $('lensStops');
+    const stops = s.lensStops || [];
+    const sig = stops.join(',');
+    if (box.dataset.sig !== sig) {
+      box.innerHTML = stops.map(z => `<button data-z="${(+z).toFixed(2)}">${lensName(z)} ${+(+z).toFixed(1)}×</button>`).join('');
+      box.querySelectorAll('button').forEach(b => b.onclick = () => api({zoom: b.dataset.z}));
+      box.dataset.sig = sig;
+    }
+    box.querySelectorAll('button').forEach(b => b.classList.toggle('on', Math.abs(parseFloat(b.dataset.z) - s.zoom) < 0.06));
+    const mf = $('mf');
+    mf.max = s.minFocusDiopter || 0; mf.disabled = !s.minFocusDiopter;
+    if (document.activeElement !== mf) mf.value = s.manualFocus ?? 0;
+    $('vMf').textContent = s.manualFocus == null ? (s.focusLocked ? 'Kilitli (tıklanan nokta)' : 'Otomatik')
+      : (s.manualFocus > 0.05 ? Math.round(100 / s.manualFocus) + ' cm' : 'Sonsuz');
+    $('bMfAuto').classList.toggle('on', s.manualFocus == null && !s.focusLocked);
+    $('bAe').classList.toggle('on', !!s.aeLock);
+    $('bAwb').classList.toggle('on', !!s.awbLock);
+    $('bHq').classList.toggle('on', !!s.hq);
+    $('opt60').hidden = !s.supports60;
+  }
+  let mfT;
+  $('mf').addEventListener('input', e => { clearTimeout(mfT); const v = e.target.value; mfT = setTimeout(() => api({focusDist: v}), 60); });
+  $('bMfAuto').onclick = () => api({autofocus: 1});
+  $('bAe').onclick = () => api({aelock: S.aeLock ? 0 : 1});
+  $('bAwb').onclick = () => api({awblock: S.awbLock ? 0 : 1});
+  $('bHq').onclick = () => api({hq: S.hq ? 0 : 1});
+
+  // ---------- kısa bildirimler ----------
+  let toastT, flashT;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3500);
+  }
+  function flash(msg) {
+    const f = $('cmdflash'); f.textContent = msg; f.classList.add('show');
+    clearTimeout(flashT); flashT = setTimeout(() => f.classList.remove('show'), 900);
+  }
+
+  // ---------- bölgeler: Arka / Sol / Sağ ----------
+  const REGION_NAMES = {1: 'Arka', 2: 'Sol', 3: 'Sağ'};
+  function setRegion(n) {
+    if (n === V.region) { flash(REGION_NAMES[n]); return; }
+    save();                                   // mevcut bölgenin görünümünü sakla
+    V.region = n;
+    const r = V.regions[n];
+    if (r) Object.assign(V, r);               // daha önce ayarlandıysa onu yükle
+    save(); layout();
+    flash(REGION_NAMES[n]);
+  }
+
+  // ---------- ön ayna: Mac'in kendi kamerası ----------
+  let frontStream = null;
+  async function frontToggle(force) {
+    const want = force ?? !frontStream;
+    if (!want) {
+      frontStream?.getTracks().forEach(t => t.stop());
+      frontStream = null;
+      document.body.classList.remove('split');
+      V.front = false; save(); layout(); syncUI();
+      return;
+    }
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      toast('Ön ayna için sayfayı Mac’teki Dikiz uygulamasından aç (menü çubuğundaki göz simgesi).');
+      return;
+    }
+    try {
+      frontStream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: 1920}, height: {ideal: 1080}}, audio: false});
+      $('fv').srcObject = frontStream;
+      document.body.classList.add('split');
+      V.front = true; save(); layout(); syncUI();
+    } catch (e) {
+      toast('Mac kamerasına erişilemedi. Tarayıcının kamera iznini kontrol et.');
+    }
+  }
+
+  // ---------- sesli komut (eller serbest) ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, listening = false;
+  const lastFired = {};
+  const COMMANDS = [
+    // [anahtar kelime kökleri, eylem, ekranda gösterilecek]
+    [['dondur', 'dur', 'bekle', 'durdur'], () => { if (!frozen) act.freeze(); }, 'Dondur'],
+    [['devam', 'oynat', 'canlı', 'başlat'], () => { if (frozen) act.freeze(); }, 'Devam'],
+    [['yakınlaş', 'yaklaş', 'yakın', 'büyüt'], () => zoomAt(V.z * 1.5), 'Yakınlaş'],
+    [['uzaklaş', 'uzak', 'küçült'], () => zoomAt(V.z / 1.5), 'Uzaklaş'],
+    [['sıfırla', 'normal'], () => resetView(), 'Sıfırla'],
+    [['arka', 'orta', 'geri'], () => setRegion(1), 'Arka'],
+    [['sol'], () => setRegion(2), 'Sol'],
+    [['sağ'], () => setRegion(3), 'Sağ'],
+    [['ışık', 'fener', 'lamba'], () => act.torch(), 'Işık'],
+    [['fotoğraf', 'çek', 'kaydet'], () => act.save(), 'Fotoğraf'],
+    [['ayna'], () => act.mirror(), 'Ayna'],
+    [['simetri'], () => act.sym(), 'Simetri'],
+    [['çizgi'], () => act.guide(), 'Çizgi'],
+    [['ön', 'yüz'], () => frontToggle(), 'Ön ayna'],
+    [['odak', 'netle'], () => api({autofocus: 1}), 'Odak'],
+  ];
+  function runVoice(text) {
+    const words = text.toLocaleLowerCase('tr').replace(/[.,!?]/g, ' ').split(/\s+/).filter(Boolean);
+    const now = Date.now();
+    for (const [stems, fn, label] of COMMANDS) {
+      if (!words.some(w => stems.some(s => w === s || (s.length >= 4 && w.startsWith(s))))) continue;
+      if (now - (lastFired[label] || 0) < 1800) continue;   // ara sonuçlarda tekrar tetiklenmesin
+      lastFired[label] = now;
+      $('vlast').textContent = '“' + label + '”';
+      flash(label);
+      fn();
+      return;
+    }
+  }
+  function voiceToggle(force) {
+    const want = force ?? !listening;
+    if (!want) { listening = false; try { rec?.stop(); } catch (e) {} $('vhud').classList.remove('on'); V.voice = false; save(); syncUI(); return; }
+    if (!SR) { toast('Bu tarayıcı sesli komutu desteklemiyor; Chrome kullan.'); return; }
+    if (!window.isSecureContext) { toast('Sesli komut için sayfayı Mac’teki Dikiz uygulamasından aç.'); return; }
+    rec = new SR();
+    rec.lang = 'tr-TR'; rec.continuous = true; rec.interimResults = true;
+    rec.onresult = e => {
+      for (let i = e.resultIndex; i < e.results.length; i++) runVoice(e.results[i][0].transcript);
+    };
+    rec.onerror = e => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        listening = false; $('vhud').classList.remove('on'); V.voice = false; save(); syncUI();
+        toast('Mikrofon izni verilmedi.');
+      }
+    };
+    rec.onend = () => { if (listening) setTimeout(() => { try { rec.start(); } catch (e) {} }, 250); };
+    listening = true;
+    try { rec.start(); } catch (e) {}
+    $('vhud').classList.add('on'); $('vlast').textContent = '';
+    V.voice = true; save(); syncUI();
+    toast('Söyle: dondur · devam · yakınlaş · uzaklaş · arka · sol · sağ · ışık · fotoğraf · ön');
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key, step = 40;
+    const map = {
+      m: act.mirror, M: act.mirror, v: () => voiceToggle(), V: act.flipV,
+      w: () => frontToggle(), W: () => frontToggle(),
+      '1': () => setRegion(1), '2': () => setRegion(2), '3': () => setRegion(3),
+      r: act.rotR, R: act.rotL, g: act.grid, G: act.grid, l: act.guide, L: act.guide,
+      ' ': act.freeze, s: act.save, S: act.save, f: act.full, F: act.full,
+      t: act.torch, T: act.torch, y: act.sym, Y: act.sym, b: act.ref, B: act.ref, k: act.sharp, K: act.sharp, a: act.af, A: act.af, '?': act.help, '0': resetView,
+      h: () => document.body.classList.toggle('hideui'), H: () => document.body.classList.toggle('hideui'),
+      '+': () => zoomAt(V.z * 1.2), '=': () => zoomAt(V.z * 1.2), '-': () => zoomAt(V.z / 1.2),
+      '[': () => { V.fine = Math.max(-45, V.fine - 1); save(); layout(); },
+      ']': () => { V.fine = Math.min(45, V.fine + 1); save(); layout(); },
+      ArrowLeft: () => { V.px += step; save(); layout(); }, ArrowRight: () => { V.px -= step; save(); layout(); },
+      ArrowUp: () => { V.py += step; save(); layout(); }, ArrowDown: () => { V.py -= step; save(); layout(); },
+      Escape: () => { $('help').classList.remove('open'); $('panel').classList.remove('open'); },
+    };
+    if (map[k]) { e.preventDefault(); map[k](); }
+  });
+
+  // ---------- panel kontrolleri ----------
+  const bindRange = (id, fn) => $(id).addEventListener('input', e => fn(parseFloat(e.target.value)));
+  bindRange('fine', v => { V.fine = v; save(); layout(); });
+  bindRange('zoom', v => zoomAt(v));
+  bindRange('br', v => { V.br = v; save(); layout(); });
+  bindRange('ct', v => { V.ct = v; save(); layout(); });
+  bindRange('op', v => { V.op = v; save(); layout(); });
+  let czT, evT;
+  bindRange('cz', v => { $('vCz').textContent = v.toFixed(2) + '×'; clearTimeout(czT); czT = setTimeout(() => api({zoom: v}), 60); });
+  bindRange('ev', v => { clearTimeout(evT); evT = setTimeout(() => api({ev: v}), 80); });
+  $('q').addEventListener('change', e => api({quality: e.target.value}));
+  $('selFps').addEventListener('change', e => api({fps: e.target.value}));
+  $('selCam').addEventListener('change', e => api({camera: e.target.value}));
+  $('selSize').addEventListener('change', e => api({size: e.target.value}));
+
+  function syncUI() {
+    $('bMirror').classList.toggle('on', V.fh);
+    $('bFlipV').classList.toggle('on', V.fv);
+    $('bGrid').classList.toggle('on', V.grid);
+    $('bGuide').classList.toggle('on', V.guide);
+    $('bFreeze').classList.toggle('on', frozen);
+    $('bSym').classList.toggle('on', V.ovMode === 'sym');
+    $('bRef').classList.toggle('on', V.ovMode === 'ref');
+    $('bSharp').classList.toggle('on', V.sharp);
+    [1, 2, 3].forEach(n => $('r' + n).classList.toggle('on', V.region === n));
+    $('bFront').classList.toggle('on', !!frontStream);
+    $('bVoice').classList.toggle('on', listening);
+    $('bVoice').querySelector('use').setAttribute('href', listening ? '#ti-microphone' : '#ti-microphone-off');
+    $('bFreeze').querySelector('use').setAttribute('href', frozen ? '#ti-player-play' : '#ti-player-pause');
+    $('bFreeze').querySelector('span').textContent = frozen ? 'Devam' : 'Dondur';
+    $('op').value = V.op; $('vOp').textContent = V.op + '%';
+    $('fine').value = V.fine; $('vFine').textContent = V.fine + '°';
+    $('zoom').value = V.z; $('vZoom').textContent = V.z.toFixed(1) + '×';
+    $('br').value = V.br; $('vBr').textContent = V.br + '%';
+    $('ct').value = V.ct; $('vCt').textContent = V.ct + '%';
+  }
+
+  function fillSelect(sel, items, current) {
+    const sig = JSON.stringify(items);
+    if (sel.dataset.sig !== sig) {
+      sel.innerHTML = items.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+      sel.dataset.sig = sig;
+    }
+    if (document.activeElement !== sel && current != null) sel.value = current;
+  }
+
+  function applyState(s) {
+    const prevRot = S.rotation;
+    S = s;
+    fillSelect($('selCam'), s.cameras.map(c => [c.id, c.label]), s.cameraId);
+    fillSelect($('selSize'), s.sizes.map(z => {
+      const [w, h] = z.split('x').map(Number), mp = (w * h / 1e6).toFixed(1);
+      return [z, `${w}×${h} (${mp} MP)`];
+    }), s.targetSize);
+    const cz = $('cz');
+    cz.min = s.zoomMin; cz.max = s.zoomMax;
+    if (document.activeElement !== cz) { cz.value = s.zoom; $('vCz').textContent = s.zoom.toFixed(2) + '×'; }
+    const ev = $('ev');
+    ev.min = s.evMin; ev.max = s.evMax; ev.disabled = s.evMin === s.evMax;
+    if (document.activeElement !== ev) ev.value = s.ev;
+    $('vEv').textContent = (s.ev * s.evStep).toFixed(1) + ' EV';
+    $('q').value = s.quality; $('vQ').textContent = s.quality;
+    if (document.activeElement !== $('selFps')) $('selFps').value = String(s.maxFps);
+    $('bTorch').classList.toggle('on', s.torch); $('bTorch').disabled = !s.hasFlash;
+    $('bTorchBar').classList.toggle('on', s.torch); $('bTorchBar').style.display = s.hasFlash ? '' : 'none';
+    renderCameraPro(s);
+    $('bPrev').classList.toggle('on', s.phonePreview);
+    if (s.error) setStatus(false, s.error);
+    else setStatus(true, `<b>${s.width}×${s.height}</b> · ${Math.round(s.fps)} fps`);
+    if (prevRot !== s.rotation) layout();
+  }
+
+  function setStatus(ok, html) {
+    $('dot').classList.toggle('live', ok);
+    $('stxt').innerHTML = html;
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch(BASE + '/api/state', {cache: 'no-store'});
+      applyState(await r.json());
+    } catch (e) { setStatus(false, 'Telefona ulaşılamıyor — uygulama açık mı, aynı Wi‑Fi\'de misiniz?'); }
+  }
+  async function api(params) {
+    try { await fetch(BASE + '/api/set?' + new URLSearchParams(params), {cache: 'no-store'}); } catch (e) {}
+    setTimeout(poll, 250); setTimeout(poll, 1200);
+  }
+  // ---------- Yön ayarı sihirbazı ----------
+  const wiz = $('wiz');
+  let wizN = 0;
+  function wizStep(n) {
+    ['w1', 'w2', 'w3'].forEach((id, i) => $(id).classList.toggle('cur', i === n - 1));
+    wiz.classList.add('open'); wizN = n;
+  }
+  function wizClose() { wiz.classList.remove('open'); wizN = 0; }
+  function wizMirror(handOnLeft) {
+    // Sağ el görüntüde soldaysa görüntü aynalı demektir: çevir.
+    if (handOnLeft) act.mirror();
+    V.calibrated = true; save();
+    wizStep(3);
+    setTimeout(() => { if (wizN === 3) wizClose(); }, 2800);
+  }
+  $('bWiz').onclick = () => wizStep(1);
+  $('wClose').onclick = () => { V.calibrated = true; save(); wizClose(); };
+  $('w1ok').onclick = () => wizStep(2);
+  $('w1flip').onclick = () => { V.r = (V.r + 2) % 4; save(); layout(); wizStep(2); };
+  $('w1rot').onclick = () => { V.r = (V.r + 1) % 4; save(); layout(); };
+  $('w2left').onclick = () => wizMirror(true);
+  $('w2right').onclick = () => wizMirror(false);
+  document.addEventListener('keydown', e => {
+    if (wizN !== 2) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopImmediatePropagation(); wizMirror(true); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopImmediatePropagation(); wizMirror(false); }
+  }, true);
+  if (!V.calibrated) setTimeout(() => wizStep(1), 700);
+  // Önceki oturumdaki ön ayna / sesli komut tercihini geri getir (izin daha önce verildiyse sessizce açılır)
+  if (V.front && window.isSecureContext) frontToggle(true);
+  if (V.voice && window.isSecureContext && SR) voiceToggle(true);
+
+  // ---------- fare durunca arayüzü gizle ----------
+  let idleT;
+  function wake() {
+    document.body.classList.remove('idle');
+    clearTimeout(idleT);
+    idleT = setTimeout(() => {
+      if (!$('panel').classList.contains('open') && !wiz.classList.contains('open') && !$('help').classList.contains('open') && !drag)
+        document.body.classList.add('idle');
+    }, 3000);
+  }
+  ['mousemove', 'pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev => document.addEventListener(ev, wake, {passive: true}));
+  wake();
+
+  poll(); setInterval(poll, 2000);
+  if (V.ovMode === 'sym') setOverlay('sym');
+  syncUI();
+})();
+</script>
+</body>
+</html>
