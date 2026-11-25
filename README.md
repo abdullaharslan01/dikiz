@@ -32,6 +32,7 @@ Sesli komut, ön ayna ve toplantı kamerası için Mac uygulamasını derle (aş
 - 🔭 **Lens seçimi:** geniş, ana ve tele lensler tek tuşla
 - 🎯 **Odak ve ışık:** tıkla-odakla, pozlama kilidi, telefon feneri, 60 fps
 - 📹 **Dikiz Kamera:** macOS sanal kamerası, menüden ayna / çevir / döndür
+- ✨ **Toplantı efektleri:** beni takip et (otomatik kadraj), arka plan bulanıklığı, güzelleştirme, ışık düzeltme, filtreler. Hepsi cihaz üzerinde, Apple Vision ve CoreImage ile.
 - 🔒 **Telefon kilitlense de** yayın sürer
 
 ### Kısayollar
