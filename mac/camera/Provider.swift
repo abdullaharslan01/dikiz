@@ -1,11 +1,12 @@
 // Dikiz Kamera — telefon görüntüsünü toplantı uygulamalarına sanal kamera olarak verir.
-// Görüntü telefonun duruşuna göre (X-Rotation) her zaman dik çevrilir; yatayda doldurur,
-// dikte kenarları bulanık arka planla tamamlar. Telefon yoksa bekleme ekranı gösterir.
+// Görüntü telefonun duruşuna göre (X-Rotation) her zaman dik çevrilir; efektler Effects.swift'te.
+// Telefon yoksa bekleme ekranı gösterir.
 
 import Foundation
 import CoreMediaIO
 import CoreVideo
 import CoreGraphics
+import CoreImage
 import CoreText
 import IOKit.audio
 import os.log
@@ -71,29 +72,20 @@ final class DikizDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private let feed = MJPEGFeed()
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
 
-    // Mac menüsündeki yön ayarları (127.0.0.1:47801/vcam), saniyede bir okunur.
-    private var cfgMirror = false
-    private var cfgFlip = false
-    private var cfgRot = 0
+    // Mac menüsündeki ayarlar (127.0.0.1:47801/vcam): yön + efektler, saniyede bir okunur.
+    private var cfg = CamConfig()
     private var cfgTimer: DispatchSourceTimer?
+    private lazy var pipeline = VideoPipeline(size: CGSize(width: CGFloat(kWidth), height: CGFloat(kHeight)))
+    private lazy var ciContext = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                                     .cacheIntermediates: false])
 
     private func pollConfig() {
         guard let u = URL(string: "http://127.0.0.1:47801/vcam") else { return }
         var req = URLRequest(url: u); req.timeoutInterval = 0.8
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             guard let self, let data, let s = String(data: data, encoding: .utf8) else { return }
-            var m = false, f = false, r = 0
-            for kv in s.split(separator: ";") {
-                let p = kv.split(separator: "=")
-                guard p.count == 2 else { continue }
-                switch p[0] {
-                case "mirror": m = p[1] == "1"
-                case "flip": f = p[1] == "1"
-                case "rot": r = Int(p[1]) ?? 0
-                default: break
-                }
-            }
-            self.timerQueue.async { self.cfgMirror = m; self.cfgFlip = f; self.cfgRot = r }
+            let c = CamConfig.parse(s)
+            self.timerQueue.async { self.cfg = c }
         }.resume()
     }
 
@@ -170,17 +162,18 @@ final class DikizDeviceSource: NSObject, CMIOExtensionDeviceSource {
         guard CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, bufferPool, bufferAux, &pbOut) == kCVReturnSuccess,
               let pb = pbOut else { return }
 
-        CVPixelBufferLockBaseAddress(pb, [])
-        if let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pb), width: Int(kWidth), height: Int(kHeight),
-                               bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pb), space: colorSpace,
-                               bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) {
-            if let f = feed.latest, Date().timeIntervalSince(f.at) < 3 {
-                draw(f, in: ctx)
-            } else {
+        if let f = feed.latest, Date().timeIntervalSince(f.at) < 3 {
+            let img = pipeline.render(f.image, rotation: f.rotation, cfg: cfg)
+            ciContext.render(img, to: pb, bounds: CGRect(x: 0, y: 0, width: Int(kWidth), height: Int(kHeight)), colorSpace: colorSpace)
+        } else {
+            CVPixelBufferLockBaseAddress(pb, [])
+            if let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pb), width: Int(kWidth), height: Int(kHeight),
+                                   bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pb), space: colorSpace,
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) {
                 drawWaiting(in: ctx)
             }
+            CVPixelBufferUnlockBaseAddress(pb, [])
         }
-        CVPixelBufferUnlockBaseAddress(pb, [])
 
         var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: kFPS),
                                         presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
@@ -192,43 +185,6 @@ final class DikizDeviceSource: NSObject, CMIOExtensionDeviceSource {
                                                  sampleBufferOut: &sb) == noErr, let sb else { return }
         streamSource.stream.send(sb, discontinuity: [],
                                  hostTimeInNanoseconds: UInt64(timing.presentationTimeStamp.seconds * Double(NSEC_PER_SEC)))
-    }
-
-    /// Kareyi telefonun duruşuna göre dik çevirip çerçeveye yerleştirir.
-    private func draw(_ f: MJPEGFeed.Frame, in ctx: CGContext) {
-        let W = CGFloat(kWidth), H = CGFloat(kHeight)
-        let iw = CGFloat(f.image.width), ih = CGFloat(f.image.height)
-        let rot = (((f.rotation + cfgRot) % 360) + 360) % 360
-        let sideways = rot == 90 || rot == 270
-        let rw = sideways ? ih : iw, rh = sideways ? iw : ih
-        let fill = max(W / rw, H / rh)
-        let fit = min(W / rw, H / rh)
-        // En-boy oranı çerçeveye yakınsa doldur; telefon dik duruyorsa sığdır + bulanık arka plan.
-        let aspectClose = abs((rw / rh) - (W / H)) < 0.25
-
-        ctx.interpolationQuality = .high
-        if !aspectClose {
-            // arka plan: aynı kareyi doldurarak, karartılmış ve büyütülmüş
-            ctx.saveGState()
-            place(f.image, rot: rot, scale: fill * 1.15, in: ctx)
-            ctx.restoreGState()
-            ctx.setFillColor(CGColor(gray: 0, alpha: 0.6))
-            ctx.fill(CGRect(x: 0, y: 0, width: W, height: H))
-        }
-        ctx.saveGState()
-        place(f.image, rot: rot, scale: aspectClose ? fill : fit, in: ctx)
-        ctx.restoreGState()
-    }
-
-    private func place(_ img: CGImage, rot: Int, scale: CGFloat, in ctx: CGContext) {
-        let W = CGFloat(kWidth), H = CGFloat(kHeight)
-        let iw = CGFloat(img.width) * scale, ih = CGFloat(img.height) * scale
-        ctx.translateBy(x: W / 2, y: H / 2)
-        // Menüdeki ayna / yukarı-aşağı çevirme ekran düzleminde (döndürmeden sonra) uygulanır.
-        ctx.scaleBy(x: cfgMirror ? -1 : 1, y: cfgFlip ? -1 : 1)
-        // CoreGraphics'te pozitif açı saat yönünün tersidir; kareyi saat yönünde "rot" kadar döndür.
-        ctx.rotate(by: -CGFloat(rot) * .pi / 180)
-        ctx.draw(img, in: CGRect(x: -iw / 2, y: -ih / 2, width: iw, height: ih))
     }
 
     private func drawWaiting(in ctx: CGContext) {
