@@ -1,0 +1,24 @@
+# Android / Gradle
+.gradle/
+.kotlin/
+build/
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Mac (üretilen dosyalar ve kişisel imza ayarı)
+mac/Dikiz.xcodeproj/
+mac/Resources/
+mac/.team
+DerivedData/
+xcuserdata/
+
+# Kurulum paketi (imzalı çıktılar repoya girmez)
+dist/
+
+# Sistem / IDE
+.DS_Store
+.idea/
+*.iml
