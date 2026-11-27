@@ -19,6 +19,7 @@
     <string>Dikiz, istersen telefonun mikrofonunu da Mac'ine aktarır: izlerken ortam sesini duyarsın ya da toplantıda Dikiz Mikrofon olarak kullanırsın. Mikrofon yalnızca Mac'ten dinlenirken açılır.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Dikiz, aynı Wi‑Fi'deki Mac'inin telefonu bulup görüntüyü alabilmesi için yerel ağı kullanır.</string>
+    <key>NSSupportsLiveActivities</key><true/>
     <key>NSBonjourServices</key>
     <array><string>_dikiz._tcp</string></array>
     <key>UILaunchScreen</key>

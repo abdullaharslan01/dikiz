@@ -6,6 +6,7 @@
 // Ayrıca telefonun IP'si değişse bile adres hep aynı kalır, ayarların kaybolmaz.
 
 import Cocoa
+import CoreAudio
 import Network
 import ServiceManagement
 import SystemExtensions
@@ -266,7 +267,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         speakerPump.recoverAfterCrash()   // önceki oturumda çıkış Dikiz Hoparlör'de kaldıysa geri ver
         bridge.start()
         installCameraExtension()
+        watchDefaultOutput()
         refresh()
+        setupWindowHooks()
+        if !defaults.bool(forKey: "setupDone") { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showSetup() } }
         Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.pollPhone() }
         // Telefon yoksa araya girmeyiz: durum yalnızca menü çubuğundaki simgede görünür (üstü çizili göz).
     }
@@ -448,6 +452,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
             menu.addItem(q)
         }
         menu.addItem(.separator())
+        let setupItem = NSMenuItem(title: "Kurulum rehberi…", action: #selector(showSetup), keyEquivalent: "")
+        setupItem.target = self
+        menu.addItem(setupItem)
         let login = NSMenuItem(title: "Mac açılınca başlat", action: #selector(toggleLogin), keyEquivalent: "")
         login.target = self
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -538,6 +545,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
             speakerPump.start(code: code)
         } else if speakerPump.isRunning {
             speakerPump.stop()
+        }
+    }
+
+    /// Kullanıcı Ses menüsünden çıkışı elle Dikiz Hoparlör'e alırsa anahtarı da aç (ve tersi):
+    /// "Dikiz Hoparlör'ü seçtim ama ses gelmiyor" olmasın.
+    private func watchDefaultOutput() {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main) { [weak self] _, _ in
+            self?.defaultOutputChanged()
+        }
+        defaultOutputChanged()
+    }
+
+    private func defaultOutputChanged() {
+        guard let spk = MicDriver.deviceID(uid: SPK_DEVICE_UID) else { return }
+        let onSpeaker = DefaultOutput.get() == spk
+        if onSpeaker && !speakerOn {
+            speakerOn = true
+            refresh()
+        } else if !onSpeaker && speakerOn && speakerPump.isRunning {
+            speakerOn = false   // başka bir çıkış seçildi: telefona göndermeyi bırak
+            refresh()
         }
     }
 
@@ -651,6 +682,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
     }
 
     func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
+        setup.model.camera = .needsAction
+        if setup.isOpen || !defaults.bool(forKey: "setupDone") { approvalAlertShown = true }   // rehber bu adımı anlatıyor
         cameraStatus = "Toplantı kamerası: onay bekliyor"
         NSLog("DikizCam: needs user approval")
         cameraReady = false
@@ -669,6 +702,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
 
     func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
         cameraReady = result == .completed
+        setup.model.camera = cameraReady ? .done : .failed("Kamera eklentisi için Mac'i yeniden başlatman gerekiyor.")
         NSLog("DikizCam: finished result=%d", result.rawValue)
         cameraStatus = cameraReady ? "✓ Toplantı kamerası hazır (“Dikiz Kamera”)" : "Toplantı kamerası: yeniden başlatma gerekli"
         refresh()
@@ -676,6 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
 
     func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
         cameraReady = false
+        setup.model.camera = .failed("Kamera eklentisi kurulamadı: \(error.localizedDescription)")
         cameraStatus = "Toplantı kamerası kurulamadı: \(error.localizedDescription)"
         NSLog("DikizCam: failed %@", "\(error)")
         refresh()
@@ -705,6 +740,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
     /// Kendiliğinden yalnızca bir kez sorar: hiç eşleşme yokken telefon görününce
     /// ya da eşleşilen telefonun kodu değişince. Başkasının telefonu için araya girmez.
     func maybeAskPairing() {
+        let m = setup.model
+        m.phoneCount = bridge.phones.count
+        if bridge.code != nil, m.pairing != .done { m.pairing = .done; m.pairedName = bridge.model }
+        if setup.isOpen { return }      // rehber açıkken eşleşme orada yapılır
+        if !defaults.bool(forKey: "setupDone") { return }   // ilk kurulumda eşleşme rehberde
         guard !pairingOpen, bridge.code == nil, !bridge.phones.isEmpty else { return }
         let rejectedHere = bridge.codeRejected && bridge.phones.contains { $0.id == bridge.pairedId }
         guard bridge.pairedId == nil || rejectedHere else { return }
@@ -762,6 +802,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         } else {
             askPairing(preferred: preferred, error: "Kod tutmadı, telefondaki kodu kontrol et")
         }
+    }
+
+    // ---- İlk kurulum rehberi ----
+    let setup = SetupWindow()
+
+    private func setupWindowHooks() {
+        let m = setup.model
+        m.openCameraSettings = { [weak self] in self?.openExtensionSettings() }
+        m.retryCamera = { [weak self] in self?.setup.model.camera = .waiting; self?.installCameraExtension() }
+        m.installDriver = { [weak self] done in
+            let err = MicDriver.install()
+            if err == nil {
+                if self?.micOn == false { self?.micOn = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    self?.micPump.restartEngine()
+                    self?.speakerPump.restartEngine()
+                    self?.refresh()
+                }
+            }
+            done(err)
+        }
+        m.pair = { [weak self] code, done in
+            guard let self else { return }
+            let phones = self.bridge.phones
+            DispatchQueue.global().async {
+                let group = DispatchGroup()
+                let lock = NSLock()
+                var match: (Bridge.Phone, String?)?
+                for p in phones {
+                    group.enter()
+                    self.bridge.verify(p, code: code) { ok, name in
+                        if ok { lock.lock(); if match == nil { match = (p, name) }; lock.unlock() }
+                        group.leave()
+                    }
+                }
+                _ = group.wait(timeout: .now() + 7)
+                DispatchQueue.main.async {
+                    if let (phone, name) = match {
+                        self.bridge.pair(phone, code: code, name: name)
+                        done(true, name ?? phone.name ?? "Telefon")
+                    } else { done(false, nil) }
+                }
+            }
+        }
+        m.finish = { [weak self] in
+            self?.defaults.set(true, forKey: "setupDone")
+            self?.setup.close()
+        }
+        setup.onClose = { [weak self] in
+            // "Sonra" ya da kapatma: rehber bir daha kendiliğinden açılmaz, menüden açılır
+            self?.defaults.set(true, forKey: "setupDone")
+            self?.refresh()
+        }
+    }
+
+    @objc func showSetup() {
+        let m = setup.model
+        if cameraReady { m.camera = .done }
+        m.refreshDriver()
+        if bridge.code != nil { m.pairing = .done; m.pairedName = bridge.model } else if m.pairing == .done { m.pairing = .needsAction }
+        m.phoneCount = bridge.phones.count
+        setup.show()
     }
 
     func openViewer() {

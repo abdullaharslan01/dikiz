@@ -1,3 +1,4 @@
+import ActivityKit
 import AVFoundation
 import SwiftUI
 import UIKit
@@ -47,9 +48,14 @@ final class AppModel: ObservableObject {
     init() {
         camera = CameraController(hub: hub)
         server = HttpServer(hub: hub, camera: camera, audio: audio, code: Pairing.code())
-        hub.onClientsChanged = { [weak self] n in self?.clients = n }
-        audio.onListenersChanged = { [weak self] n in self?.listeners = n }
-        server.speaker.onPlayingChanged = { [weak self] on in self?.macSound = on }
+        hub.onClientsChanged = { [weak self] n in self?.clients = n; self?.updateActivity() }
+        audio.onListenersChanged = { [weak self] n in self?.listeners = n; self?.updateActivity() }
+        server.speaker.onPlayingChanged = { [weak self] on in self?.macSound = on; self?.updateActivity() }
+        // Dynamic Island / kilit ekranındaki "Kapat"
+        NotificationCenter.default.addObserver(forName: .dikizStop, object: nil, queue: .main) { [weak self] _ in
+            self?.pause()
+            self?.endActivity()
+        }
     }
 
     func resume() {
@@ -79,12 +85,45 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Live Activity (Dynamic Island ve kilit ekranı)
+
+    private var activity: Activity<DikizAttributes>?
+    private var live = false
+
+    private func activityState() -> DikizAttributes.ContentState {
+        .init(live: live, connected: clients > 0 || listeners > 0 || macSound,
+              mic: listeners > 0, macSound: macSound, quality: camera.currentQuality())
+    }
+
+    func updateActivity() {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let st = activityState()
+        if let a = activity {
+            Task { await a.update(ActivityContent(state: st, staleDate: nil)) }
+        } else if live {
+            activity = try? Activity.request(attributes: DikizAttributes(),
+                                             content: ActivityContent(state: st, staleDate: nil), pushType: nil)
+        }
+    }
+
+    func endActivity() {
+        let a = activity
+        activity = nil
+        Task { await a?.end(nil, dismissalPolicy: .immediate) }
+    }
+
     func pause() {
+        live = false
+        updateActivity()   // "Dikiz duraklatıldı, devam etmek için dokun"
         camera.stop()
         UIApplication.shared.isIdleTimerDisabled = false
     }
 
     private func begin() {
+        live = true
+        // Önceki oturumdan kalan etkinlikleri kapat, yenisini başlat
+        if activity == nil { for a in Activity<DikizAttributes>.activities { Task { await a.end(nil, dismissalPolicy: .immediate) } } }
+        defer { updateActivity() }
         camera.start()
         // Mikrofonu baştan sor: Mac'ten dinlenmek istendiğinde telefon başında kimse olmayabilir.
         if AVAudioApplication.shared.recordPermission == .undetermined { AudioHub.permission { _ in } }

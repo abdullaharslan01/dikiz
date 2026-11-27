@@ -8,8 +8,8 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.9"
-    CURRENT_PROJECT_VERSION: "10"
+    MARKETING_VERSION: "2.0"
+    CURRENT_PROJECT_VERSION: "11"
     ENABLE_HARDENED_RUNTIME: YES
 targets:
   Dikiz:
@@ -19,6 +19,7 @@ targets:
       - path: Dikiz.swift
       - path: Audio.swift
       - path: Preview.swift
+      - path: Setup.swift
       - path: Resources/AppIcon.icns
         buildPhase: resources
     settings:

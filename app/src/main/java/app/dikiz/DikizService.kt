@@ -17,6 +17,9 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -51,6 +54,17 @@ class DikizService : LifecycleService() {
             .apply { acquire(4 * 60 * 60 * 1000L) }
 
         running.value = Running(camera, hub, port, code, srv, audio, speaker)
+        // Bildirim canlı durumu gösterir: kimse bağlı değil / Mac'e bağlı, mikrofon ve Mac sesi
+        lifecycleScope.launch {
+            combine(hub.clientCount, audio.listeners, speaker.playing, camera.state) { v, mic, spk, st ->
+                Live(v, mic, spk, if (st.height > 0) minOf(st.width, st.height) else 0)
+            }.collect { live ->
+                if (live != lastLive) {
+                    lastLive = live
+                    getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(live))
+                }
+            }
+        }
         advertise(port)
 
         // Telefonun duruşunu izle (dik / yatay / ters) → görüntü hep düz gider.
@@ -147,7 +161,10 @@ class DikizService : LifecycleService() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private data class Live(val viewers: Int, val mic: Int, val macSound: Boolean, val res: Int)
+    private var lastLive: Live? = null
+
+    private fun buildNotification(live: Live? = null): Notification {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE,
@@ -156,13 +173,25 @@ class DikizService : LifecycleService() {
             this, 1, Intent(this, DikizService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE,
         )
+        val connected = live != null && (live.viewers > 0 || live.mic > 0 || live.macSound)
+        val title = if (connected) "Dikiz: Mac'e bağlı" else "Dikiz açık"
+        val parts = mutableListOf<String>()
+        if (live != null && live.viewers > 0) parts += if (live.res > 0) "kamera ${live.res}p" else "kamera"
+        if (live != null && live.mic > 0) parts += "mikrofon"
+        if (live != null && live.macSound) parts += "Mac sesi çalıyor"
+        val text = if (parts.isEmpty()) "Mac'te Dikiz'i aç, ekrandaki kodu gir" else parts.joinToString(", ").replaceFirstChar { it.uppercase() }
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_dikiz)
-            .setContentTitle("Dikiz yayında")
-            .setContentText("Kamera Mac'e aktarılıyor")
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(open)
-            .addAction(0, "Durdur", stop)
+            .addAction(0, "Kapat", stop)
+            // Android 16 canlı güncelleme: durum çubuğunda (kamera çentiğinin yanında) "Canlı" çipi
+            .setRequestPromotedOngoing(true)
+            .setShortCriticalText(if (connected) "Canlı" else "Dikiz")
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
