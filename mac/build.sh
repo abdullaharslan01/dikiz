@@ -33,12 +33,39 @@ fi
 
 xcodegen generate --quiet
 xcodebuild -project Dikiz.xcodeproj -scheme Dikiz -configuration Release \
-  -derivedDataPath "$TMP/dd" -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
-  DEVELOPMENT_TEAM="$TEAM" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build -quiet
+  -archivePath "$TMP/Dikiz.xcarchive" -derivedDataPath "$TMP/dd" -allowProvisioningUpdates \
+  DEVELOPMENT_TEAM="$TEAM" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO archive -quiet
 
 mkdir -p "$OUT"
 rm -rf "$OUT/Dikiz.app" "$OUT/Dikiz.dmg" "$OUT/Dikiz-Kur.command"
-cp -R "$TMP/dd/Build/Products/Release/Dikiz.app" "$TMP/Dikiz.app"
+
+if [ "${DIKIZ_DEV:-0}" = "1" ]; then
+  # Yalnızca bu Mac için hızlı geliştirme imzası (başka Mac'te açılmaz).
+  cp -R "$TMP/Dikiz.xcarchive/Products/Applications/Dikiz.app" "$TMP/Dikiz.app"
+else
+  # Developer ID imzası + Apple onayı (notarization): her Mac'te uyarısız açılır.
+  # Xcode'da oturum açık hesabın "Cloud Managed Developer ID Certificate" yetkisi olmalı.
+  cat > "$TMP/export.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>method</key><string>developer-id</string>
+<key>teamID</key><string>$TEAM</string>
+<key>signingStyle</key><string>automatic</string>
+<key>destination</key><string>upload</string>
+</dict></plist>
+PLIST
+  xcodebuild -exportArchive -archivePath "$TMP/Dikiz.xcarchive" -exportOptionsPlist "$TMP/export.plist" \
+    -exportPath "$TMP/export" -allowProvisioningUpdates >/dev/null
+  echo "• Apple onayı bekleniyor…"
+  for i in $(seq 1 60); do
+    xcodebuild -exportNotarizedApp -archivePath "$TMP/Dikiz.xcarchive" -exportPath "$TMP/notarized" >/dev/null 2>&1 && break
+    sleep 15
+  done
+  [ -d "$TMP/notarized/Dikiz.app" ] || { echo "✗ Apple onayı tamamlanmadı" >&2; exit 1; }
+  cp -R "$TMP/notarized/Dikiz.app" "$TMP/Dikiz.app"
+  spctl -a "$TMP/Dikiz.app" && echo "✓ Apple onaylı (Developer ID)"
+fi
 
 # Sürükle-bırak kurulum: dist/Dikiz.dmg (Dikiz → Uygulamalar). Gevşek .app bırakmayız:
 # Mac'te birden fazla Dikiz kopyası görünmesin.
