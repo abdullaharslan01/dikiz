@@ -36,7 +36,9 @@ import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.PanoramaWideAngle
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.WifiOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -128,6 +130,7 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onStop = { DikizService.stop(this@MainActivity); finish() },
+                        onChangeCode = { DikizService.changeCode(this@MainActivity) },
                     )
                 }
             }
@@ -161,8 +164,11 @@ private fun DikizScreen(
     onPreviewView: (PreviewView?) -> Unit,
     onDim: (Boolean) -> Unit,
     onStop: () -> Unit,
+    onChangeCode: () -> Unit,
 ) {
     val hasPermission = true
+    var showCode by remember { mutableStateOf(false) }
+    val prettyCode = if (code.length == 6) code.chunked(3).joinToString(" ") else code
     val state by camera.state.collectAsState()
     val clients by hub.clientCount.collectAsState()
     var addresses by remember { mutableStateOf(HttpServer.localAddresses()) }
@@ -202,19 +208,23 @@ private fun DikizScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("Wi‑Fi'yi aç (Mac ile aynı ağ)", color = Color.White, fontSize = 14.sp)
                     }
-                    1 -> Chip {
+                    1 -> Chip(onClick = { showCode = true }) {
                         Icon(Icons.Rounded.Laptop, null, tint = Accent, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(10.dp))
                         Column {
-                            Text("Mac'te Dikiz'i aç", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Mac'te Dikiz'i aç, bu kodu gir", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                prettyCode, color = Accent, fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace, letterSpacing = 2.sp,
+                            )
                             Text(
                                 "${addresses.first()}:$port/$code",
-                                color = Muted, fontSize = 12.sp, maxLines = 1,
+                                color = Muted, fontSize = 11.sp, maxLines = 1,
                                 fontFamily = FontFamily.Monospace,
                             )
                         }
                     }
-                    else -> Chip {
+                    else -> Chip(onClick = { showCode = true }) {
                         Box(Modifier.size(8.dp).clip(CircleShape).background(Live))
                         Spacer(Modifier.width(8.dp))
                         Text("Mac'e bağlı", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
@@ -278,6 +288,32 @@ private fun DikizScreen(
             )
         }
 
+        if (showCode) {
+            AlertDialog(
+                onDismissRequest = { showCode = false },
+                title = { Text("Eşleşme kodu") },
+                text = {
+                    Column {
+                        Text(
+                            prettyCode, color = Accent, fontSize = 36.sp, fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace, letterSpacing = 3.sp,
+                        )
+                        Spacer(Modifier.size(12.dp))
+                        Text(
+                            "Mac'teki Dikiz bu kodu bir kez sorar, sonra bu telefona kendiliğinden bağlanır. " +
+                                "Aynı ağdaki başka biri kodu bilmeden kameranı açamaz.\n\n" +
+                                "Kodu değiştirirsen bağlı Mac'lerin bağlantısı kesilir ve yeni kodu sorar.",
+                            fontSize = 14.sp,
+                        )
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showCode = false }) { Text("Tamam") } },
+                dismissButton = {
+                    TextButton(onClick = { onChangeCode() }) { Text("Kodu değiştir", color = Color(0xFFFF8A80)) }
+                },
+            )
+        }
+
         if (dimmed) {
             Box(
                 Modifier.fillMaxSize().background(Color.Black)
@@ -291,9 +327,11 @@ private fun DikizScreen(
 }
 
 @Composable
-private fun Chip(content: @Composable () -> Unit) {
+private fun Chip(onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {
     Row(
-        Modifier.clip(RoundedCornerShape(50)).background(Glass).padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.clip(RoundedCornerShape(28.dp)).background(Glass)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) { content() }
 }

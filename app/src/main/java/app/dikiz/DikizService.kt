@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
  */
 class DikizService : LifecycleService() {
 
-    class Running(val camera: CameraController, val hub: FrameHub, val port: Int, val code: String)
+    class Running(val camera: CameraController, val hub: FrameHub, val port: Int, val code: String, val server: HttpServer)
 
     private var server: HttpServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -49,8 +49,8 @@ class DikizService : LifecycleService() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Dikiz:stream")
             .apply { acquire(4 * 60 * 60 * 1000L) }
 
-        running.value = Running(camera, hub, port, code)
-        advertise(port, code)
+        running.value = Running(camera, hub, port, code, srv)
+        advertise(port)
 
         // Telefonun duruşunu izle (dik / yatay / ters) → görüntü hep düz gider.
         orientation = object : OrientationEventListener(this) {
@@ -74,14 +74,17 @@ class DikizService : LifecycleService() {
     private var nsd: NsdManager? = null
     private var nsdListener: NsdManager.RegistrationListener? = null
 
-    private fun advertise(port: Int, code: String) {
+    // İlanda eşleşme kodu YOK: yalnızca telefonu tanıtan kalıcı kimlik ve ad var.
+    // Mac, aynı ağdaki telefonları bu kimlikle ayırır; kodu kullanıcı telefondan okuyup girer.
+    private fun advertise(port: Int) {
         if (port == 0) return
         val info = NsdServiceInfo().apply {
             serviceName = "Dikiz"
             serviceType = "_dikiz._tcp"
             this.port = port
-            setAttribute("code", code)
+            setAttribute("id", deviceId(this@DikizService))
             setAttribute("model", Build.MODEL)
+            setAttribute("name", deviceName(this@DikizService).take(60))
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(si: NsdServiceInfo) {}
@@ -164,14 +167,40 @@ class DikizService : LifecycleService() {
             context.startService(Intent(context, DikizService::class.java).setAction(ACTION_STOP))
         }
 
+        /** 6 haneli eşleşme kodu; telefon yeniden başlasa da aynı kalır, istenirse değiştirilir. */
         fun accessCode(context: Context): String {
             val prefs = context.getSharedPreferences("app", MODE_PRIVATE)
-            return prefs.getString("code", null) ?: run {
-                val chars = "abcdefghjkmnpqrstuvwxyz23456789"
-                val c = (1..4).map { chars.random() }.joinToString("")
-                prefs.edit().putString("code", c).apply()
-                c
+            return prefs.getString("pin", null) ?: newPin().also { prefs.edit().putString("pin", it).apply() }
+        }
+
+        /** Yeni kod üret, kaydet ve çalışan sunucuya uygula (bağlı Mac'ler yeni kodu ister). */
+        fun changeCode(context: Context) {
+            val c = newPin()
+            context.getSharedPreferences("app", MODE_PRIVATE).edit().putString("pin", c).apply()
+            running.value?.let { r ->
+                r.server.changeCode(c)
+                running.value = Running(r.camera, r.hub, r.port, c, r.server)
             }
+        }
+
+        private fun newPin(): String {
+            val rnd = java.security.SecureRandom()
+            return (1..6).map { rnd.nextInt(10) }.joinToString("")
+        }
+
+        /** Telefonu aynı ağdaki diğer telefonlardan ayıran kalıcı kimlik (gizli değil). */
+        fun deviceId(context: Context): String {
+            val prefs = context.getSharedPreferences("app", MODE_PRIVATE)
+            return prefs.getString("id", null) ?: java.util.UUID.randomUUID().toString().replace("-", "").take(12)
+                .also { prefs.edit().putString("id", it).apply() }
+        }
+
+        /** Telefonun ayarlardaki adı (ör. "Ali'nin Xiaomi 15"); yoksa model. */
+        fun deviceName(context: Context): String {
+            val n = if (Build.VERSION.SDK_INT >= 25)
+                android.provider.Settings.Global.getString(context.contentResolver, android.provider.Settings.Global.DEVICE_NAME)
+            else null
+            return n?.takeIf { it.isNotBlank() } ?: Build.MODEL
         }
     }
 }

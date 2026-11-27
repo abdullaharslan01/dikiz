@@ -23,14 +23,40 @@ import java.util.concurrent.Executors
  *  /{kod}/api/state   -> JSON durum
  *  /{kod}/api/set?k=v -> ayar değiştir
  *
- * Kod, aynı ağdaki başkalarının kamerayı rastgele açmasını engeller.
+ * Kod (eşleşme kodu) yalnızca telefon ekranında görünür; Bonjour ilanında yer almaz.
+ * Böylece aynı ağdaki başkası kamerayı açamaz. Yanlış kod denemeleri adres başına sınırlanır.
  */
 class HttpServer(
     private val context: Context,
     private val hub: FrameHub,
     private val camera: CameraController,
-    private val code: String,
+    initialCode: String,
 ) {
+    @Volatile var code: String = initialCode
+        private set
+
+    /** Kodu değiştir ve açık bağlantıları kes: eski kodla bağlı olanlar yeni kodu girmek zorunda. */
+    fun changeCode(newCode: String) {
+        code = newCode
+        synchronized(sockets) { sockets.forEach { runCatching { it.close() } }; sockets.clear() }
+    }
+
+    // ---- Kod deneme sınırı: adres başına 60 sn'de 20 yanlış → 60 sn kilit ----
+    private class Tries(var count: Int, var since: Long, var lockedUntil: Long)
+    private val tries = mutableMapOf<String, Tries>()
+
+    private fun isLocked(ip: String): Boolean = synchronized(tries) {
+        (tries[ip]?.lockedUntil ?: 0L) > System.currentTimeMillis()
+    }
+
+    private fun recordFailure(ip: String) = synchronized(tries) {
+        val now = System.currentTimeMillis()
+        val t = tries.getOrPut(ip) { Tries(0, now, 0L) }
+        if (now - t.since > 60_000) { t.count = 0; t.since = now }
+        t.count++
+        if (t.count >= 20) { t.lockedUntil = now + 60_000; t.count = 0; t.since = now }
+    }
+
     private var server: ServerSocket? = null
     private val pool = Executors.newCachedThreadPool()
     private val sockets = Collections.synchronizedSet(mutableSetOf<Socket>())
@@ -88,11 +114,18 @@ class HttpServer(
             val segs = uri.pathSegments
             val out = socket.getOutputStream()
 
+            val ip = socket.inetAddress?.hostAddress ?: "?"
+            if (segs.firstOrNull() == "favicon.ico") return send(out, 404, "text/plain", "".toByteArray())
+            if (isLocked(ip)) {
+                return send(out, 429, "text/html; charset=utf-8",
+                    ("<meta name=viewport content='width=device-width'><body style='font:18px system-ui;padding:24px'>" +
+                        "<h2>Çok fazla yanlış deneme</h2><p>Bir dakika sonra tekrar dene.</p>").toByteArray())
+            }
             if (segs.isEmpty() || segs[0] != code) {
-                if (segs.firstOrNull() == "favicon.ico") return send(out, 404, "text/plain", "".toByteArray())
+                if (segs.isNotEmpty()) recordFailure(ip)
                 return send(out, 404, "text/html; charset=utf-8",
                     ("<meta name=viewport content='width=device-width'><body style='font:18px system-ui;padding:24px'>" +
-                        "<h2>Erişim kodu eksik</h2><p>Telefondaki Dikiz ekranında yazan adresin tamamını aç " +
+                        "<h2>Eşleşme kodu eksik ya da değişmiş</h2><p>Telefondaki Dikiz ekranında yazan adresin tamamını aç " +
                         "(sonundaki kod dahil).</p>").toByteArray())
             }
             when (segs.getOrNull(1)) {
@@ -159,7 +192,7 @@ class HttpServer(
     }
 
     private fun send(out: OutputStream, status: Int, type: String, body: ByteArray) {
-        val reason = when (status) { 200 -> "OK"; 404 -> "Not Found"; 503 -> "Service Unavailable"; else -> "OK" }
+        val reason = when (status) { 200 -> "OK"; 404 -> "Not Found"; 429 -> "Too Many Requests"; 503 -> "Service Unavailable"; else -> "OK" }
         out.write(
             ("HTTP/1.1 $status $reason\r\nContent-Type: $type\r\nContent-Length: ${body.size}\r\n" +
                 "Cache-Control: no-store\r\nConnection: close\r\n\r\n").toByteArray()
