@@ -10,6 +10,7 @@ local.properties
 
 # Mac (üretilen dosyalar ve kişisel imza ayarı)
 mac/Dikiz.xcodeproj/
+ios/Dikiz.xcodeproj/
 mac/Resources/
 mac/.team
 DerivedData/

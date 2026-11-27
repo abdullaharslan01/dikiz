@@ -1,0 +1,33 @@
+# XcodeGen tanımı: `xcodegen generate` → Dikiz.xcodeproj (iPhone uygulaması)
+# Ekip kimliği koda yazılmaz: xcodebuild ... DEVELOPMENT_TEAM=$(cat ../mac/.team)
+name: Dikiz
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Dikiz:
+    type: application
+    platform: iOS
+    sources:
+      - path: Dikiz
+        excludes: ["Info.plist"]
+      # İzleme sayfası Android ile ortak: tek kaynak app/src/main/assets/index.html
+      - path: ../app/src/main/assets/index.html
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: Dikiz
+        PRODUCT_BUNDLE_IDENTIFIER: app.dikiz.ios
+        INFOPLIST_FILE: Dikiz/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
