@@ -149,7 +149,7 @@
 <symbol id="ti-rotate-clockwise" viewBox="0 0 24 24"><path d="M4.05 11a8 8 0 1 1 .5 4m-.5 5v-5h5"/></symbol>
 </svg>
 
-<div id="front"><video id="fv" autoplay muted playsinline></video><div class="tag">Ön · Mac kamerası</div></div>
+<div id="front"><video id="fv" autoplay muted playsinline></video><div class="tag">Ön ayna</div></div>
 <div id="vhud"><span class="mic"></span><span>Dinliyorum</span><b id="vlast"></b></div>
 <div id="audioOnly"><svg viewBox="0 0 24 24"><use href="#ti-volume"/></svg><div>Yalnızca ses · görüntü kapalı</div><div style="font-size:12px">Ses gelmiyorsa <b>Dinle</b>'ye bas · görüntü için kaliteyi seç</div></div>
 <div id="toast"></div>
@@ -756,8 +756,26 @@
       return;
     }
     try {
-      frontStream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: 1920}, height: {ideal: 1080}}, audio: false});
+      // Mac'in kendi kamerasını bul: Dikiz Kamera (telefonun kendi görüntüsü) asla seçilmez.
+      const isDikiz = l => /dikiz/i.test(l || '');
+      let cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      let pick = cams.find(c => c.label && !isDikiz(c.label));
+      if (!pick && cams.every(c => !c.label)) {
+        // İzin daha verilmemiş: etiketler boş. Bir kez izin al, sonra gerçek listeye bak.
+        const tmp = await navigator.mediaDevices.getUserMedia({video: true, audio: false});
+        tmp.getTracks().forEach(t => t.stop());
+        cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+        pick = cams.find(c => c.label && !isDikiz(c.label));
+      }
+      if (!pick) {
+        V.front = false; save(); syncUI();
+        $('bFront').style.display = 'none';
+        toast('Bu Mac\'te kamera yok: ön ayna kullanılamıyor.');
+        return;
+      }
+      frontStream = await navigator.mediaDevices.getUserMedia({video: {deviceId: {exact: pick.deviceId}, width: {ideal: 1920}, height: {ideal: 1080}}, audio: false});
       $('fv').srcObject = frontStream;
+      document.querySelector('#front .tag').textContent = 'Ön · ' + pick.label.replace(/\s*\(.*\)\s*$/, '');
       document.body.classList.add('split');
       V.front = true; save(); layout(); syncUI();
     } catch (e) {
@@ -966,6 +984,12 @@
     if (e.key === 'ArrowRight') { e.preventDefault(); e.stopImmediatePropagation(); wizMirror(false); }
   }, true);
   // Yön sihirbazı artık kendiliğinden açılmaz: "Daha → Özel araçlar → Yön".
+  // Mac'te Dikiz Kamera dışında kamera yoksa Ön ayna düğmesini hiç gösterme (izin önceden verildiyse etiketler okunur)
+  navigator.mediaDevices?.enumerateDevices?.().then(ds => {
+    const cams = ds.filter(d => d.kind === 'videoinput');
+    if (cams.length && cams.every(c => c.label) && !cams.some(c => !/dikiz/i.test(c.label))) $('bFront').style.display = 'none';
+    if (!cams.length) $('bFront').style.display = 'none';
+  }).catch(() => {});
   // Önceki oturumdaki ön ayna / sesli komut tercihini geri getir (izin daha önce verildiyse sessizce açılır)
   if (V.front && window.isSecureContext) frontToggle(true);
   if (V.voice && window.isSecureContext && SR) voiceToggle(true);

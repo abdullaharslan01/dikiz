@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -295,7 +296,10 @@ private fun DikizScreen(
                 }
                 Spacer(Modifier.size(16.dp))
             }
-        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
             if (state.cameras.size > 1) {
                 RoundAction(Icons.Rounded.Cameraswitch, "Çevir") { camera.switchFacing() }
             }
@@ -381,14 +385,14 @@ private fun Chip(onClick: (() -> Unit)? = null, content: @Composable () -> Unit)
 private fun RoundAction(icon: ImageVector, label: String, active: Boolean = false, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.size(58.dp).clip(CircleShape)
+            Modifier.size(52.dp).clip(CircleShape)
                 .background(if (active) Accent else Glass)
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = label, tint = if (active) Color.Black else Color.White, modifier = Modifier.size(26.dp))
+            Icon(icon, contentDescription = label, tint = if (active) Color.Black else Color.White, modifier = Modifier.size(24.dp))
         }
         Spacer(Modifier.size(6.dp))
-        Text(label, color = Color.White, fontSize = 12.sp)
+        Text(label, color = Color.White, fontSize = 11.sp, maxLines = 1)
     }
 }
