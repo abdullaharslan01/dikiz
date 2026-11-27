@@ -20,7 +20,8 @@ final class Bridge {
     private var browser: NWBrowser?
 
     /// Aynı ağda bulunan Dikiz telefonları (birden fazla kişi aynı Wi‑Fi'de olabilir).
-    struct Phone { let id: String; let name: String; let endpoint: NWEndpoint }
+    /// Ad yalnızca eski sürüm telefonların ilanında olur; yenilerde ad kodla (/api/state) öğrenilir.
+    struct Phone { let id: String; let name: String?; let endpoint: NWEndpoint }
     private(set) var phones: [Phone] = []
 
     // Eşleşilen telefon: kimliği ve kodu kalıcı; Mac yalnızca bu telefona bağlanır.
@@ -112,8 +113,9 @@ final class Bridge {
                     id = txt["id"] ?? ""; name = txt["name"] ?? ""; model = txt["model"] ?? ""
                 }
                 if case let .service(svc, _, _, _) = r.endpoint, id.isEmpty { id = "svc:" + svc }  // eski sürüm telefon
-                return Phone(id: id, name: name.isEmpty ? (model.isEmpty ? "Android telefon" : model) : name, endpoint: r.endpoint)
-            }.sorted { $0.name < $1.name }
+                let shown = name.isEmpty ? (model.isEmpty ? nil : model) : name
+                return Phone(id: id, name: shown, endpoint: r.endpoint)
+            }
             self.recompute()
         }
         b.start(queue: q)
@@ -125,18 +127,17 @@ final class Bridge {
     /// Eşleşilen telefon ağdaysa ona bağlan; başka telefonlara asla bağlanma.
     private func recompute() {
         if let id = pairedId, let p = phones.first(where: { $0.id == id }), let c = pairedCode, !codeRejected {
-            target = p.endpoint; code = c; model = p.name
-            if p.name != pairedName { defaults.set(p.name, forKey: "pairedName") }
+            target = p.endpoint; code = c; model = pairedName ?? p.name ?? "Telefon"
         } else {
             target = nil; code = nil; model = nil
         }
         notify()
     }
 
-    func pair(_ phone: Phone, code c: String) {
+    func pair(_ phone: Phone, code c: String, name: String?) {
         q.async {
             self.defaults.set(phone.id, forKey: "pairedId")
-            self.defaults.set(phone.name, forKey: "pairedName")
+            self.defaults.set(name ?? phone.name ?? "Telefon", forKey: "pairedName")
             self.defaults.set(c, forKey: "pairedCode")
             self.codeRejected = false
             self.recompute()
@@ -160,25 +161,45 @@ final class Bridge {
         }
     }
 
-    /// Kodu doğrudan telefona sorar: GET /<kod>/api/state → 200 ise doğru.
-    func verify(_ phone: Phone, code c: String, done: @escaping (Bool) -> Void) {
+    /// Telefon adı değişmişse (kodla öğrenilen) güncelle.
+    func updateName(_ name: String) {
+        q.async {
+            guard self.code != nil, name != self.pairedName else { return }
+            self.defaults.set(name, forKey: "pairedName")
+            self.recompute()
+        }
+    }
+
+    /// Kodu doğrudan telefona sorar: GET /<kod>/api/state → 200 ise doğru; telefonun adını da döner.
+    func verify(_ phone: Phone, code c: String, done: @escaping (Bool, String?) -> Void) {
         let conn = NWConnection(to: phone.endpoint, using: .tcp)
         var finished = false
+        var acc = Data()
         let finish: (Bool) -> Void = { ok in
             guard !finished else { return }
             finished = true
             conn.cancel()
-            done(ok)
+            var name: String?
+            if ok, let r = acc.range(of: Data("\r\n\r\n".utf8)),
+               let j = try? JSONSerialization.jsonObject(with: acc[r.upperBound...]) as? [String: Any] {
+                name = j["deviceName"] as? String
+            }
+            done(ok, name)
         }
         conn.stateUpdateHandler = { st in
             switch st {
             case .ready:
                 let req = "GET /\(c)/api/state HTTP/1.1\r\nHost: dikiz\r\nConnection: close\r\n\r\n"
                 conn.send(content: req.data(using: .utf8), completion: .contentProcessed { _ in })
-                conn.receive(minimumIncompleteLength: 12, maximumLength: 256) { data, _, _, _ in
-                    let head = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                    finish(head.hasPrefix("HTTP/1.1 200"))
+                func read() {
+                    conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isDone, err in
+                        if let data { acc.append(data) }
+                        if isDone || err != nil || acc.count > 256 * 1024 {
+                            finish(acc.starts(with: Data("HTTP/1.1 200".utf8)))
+                        } else { read() }
+                    }
                 }
+                read()
             case .failed, .cancelled:
                 finish(false)
             default: break
@@ -589,6 +610,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
                 let zoom = (j["zoom"] as? Double) ?? 1
                 let torch = (j["torch"] as? Bool) ?? false
                 let flash = (j["hasFlash"] as? Bool) ?? false
+                if let dn = j["deviceName"] as? String, !dn.isEmpty { self.bridge.updateName(dn) }
                 let preset = (j["preset"] as? Int) ?? 0
                 if preset != self.phonePreset { self.phonePreset = preset; self.refresh() }
                 if stops != self.phoneLensStops || abs(zoom - self.phoneZoom) > 0.01 || torch != self.phoneTorch || flash != self.phoneHasFlash {
@@ -699,43 +721,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         defer { pairingOpen = false }
         NSApp.activate(ignoringOtherApps: true)
 
+        // Gizlilik: ağdaki telefonlar listelenmez. Kod girilir; Mac kodu ağdaki Dikiz
+        // telefonlarına sorar ve kabul edenle eşleşir.
         let a = NSAlert()
         a.messageText = error ?? (bridge.codeRejected ? "Telefondaki kod değişmiş" : "Telefonu eşleştir")
         a.informativeText = "Telefonda Dikiz'i aç; ekranın üstünde yazan 6 haneli kodu gir.\n" +
             "Bir kez girmen yeter: Mac bundan sonra yalnızca bu telefona bağlanır."
         if error != nil { a.alertStyle = .warning }
-
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 34, width: 260, height: 26), pullsDown: false)
-        for p in phones { popup.addItem(withTitle: p.name); popup.lastItem?.representedObject = p.id }
-        if let sel = picked ?? preferred, let i = phones.firstIndex(where: { $0.id == sel }) { popup.selectItem(at: i) }
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 28))
         field.placeholderString = "Kod (ör. 482 913)"
-        field.font = .monospacedSystemFont(ofSize: 16, weight: .semibold)
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 62))
-        box.addSubview(popup)
-        box.addSubview(field)
-        a.accessoryView = box
+        field.font = .monospacedSystemFont(ofSize: 18, weight: .semibold)
+        a.accessoryView = field
         a.addButton(withTitle: "Eşleştir")
         a.addButton(withTitle: "Vazgeç")
         a.window.initialFirstResponder = field
         guard a.runModal() == .alertFirstButtonReturn else { return }
 
-        let phone = phones[max(0, popup.indexOfSelectedItem)]
         let code = field.stringValue.lowercased().filter { $0.isLetter || $0.isNumber }
         guard !code.isEmpty else {
             pairingOpen = false
-            return askPairing(preferred: preferred, error: "Kodu yazmadın", picked: phone.id)
+            return askPairing(preferred: preferred, error: "Kodu yazmadın")
         }
-        let sem = DispatchSemaphore(value: 0)
-        var ok = false
-        bridge.verify(phone, code: code) { r in ok = r; sem.signal() }
-        _ = sem.wait(timeout: .now() + 7)
+        // Kodu tüm telefonlara aynı anda sor; doğru kodu yalnızca bir telefon kabul eder.
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var match: (Bridge.Phone, String?)?
+        for p in phones {
+            group.enter()
+            bridge.verify(p, code: code) { ok, name in
+                if ok { lock.lock(); if match == nil { match = (p, name) }; lock.unlock() }
+                group.leave()
+            }
+        }
+        _ = group.wait(timeout: .now() + 7)
         pairingOpen = false
-        if ok {
-            bridge.pair(phone, code: code)
+        lock.lock(); let m = match; lock.unlock()
+        if let (phone, name) = m {
+            bridge.pair(phone, code: code, name: name)
             openedOnce = false   // eşleşince görüntüyü aç
         } else {
-            askPairing(preferred: preferred, error: "Kod tutmadı, telefondaki kodu kontrol et", picked: phone.id)
+            askPairing(preferred: preferred, error: "Kod tutmadı, telefondaki kodu kontrol et")
         }
     }
 

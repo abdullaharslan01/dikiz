@@ -59,11 +59,8 @@ final class HttpServer {
         guard let l = try? NWListener(using: params, on: NWEndpoint.Port(rawValue: p)!) else {
             tryPort(p + 1, ready); return
         }
-        let txt = NWTXTRecord([
-            "id": Pairing.deviceId(),
-            "model": Pairing.modelIdentifier(),
-            "name": String(Pairing.deviceName().prefix(60)),
-        ])
+        // Gizlilik: ilanda yalnızca rastgele kimlik; ad ve model ancak kodla (/api/state) görülür.
+        let txt = NWTXTRecord(["id": Pairing.deviceId(), "v": "2"])
         l.service = NWListener.Service(name: "Dikiz", type: "_dikiz._tcp", domain: nil, txtRecord: txt)
         l.newConnectionHandler = { [weak self] c in self?.accept(c) }
         l.stateUpdateHandler = { [weak self] st in

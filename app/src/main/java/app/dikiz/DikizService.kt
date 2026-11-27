@@ -75,17 +75,17 @@ class DikizService : LifecycleService() {
     private var nsd: NsdManager? = null
     private var nsdListener: NsdManager.RegistrationListener? = null
 
-    // İlanda eşleşme kodu YOK: yalnızca telefonu tanıtan kalıcı kimlik ve ad var.
-    // Mac, aynı ağdaki telefonları bu kimlikle ayırır; kodu kullanıcı telefondan okuyup girer.
+    // İlanda eşleşme kodu, ad ve model YOK: yalnızca rastgele kalıcı kimlik.
+    // Mac kullanıcının girdiği kodu ağdaki Dikiz telefonlarına sorar; kabul edenle eşleşir.
     private fun advertise(port: Int) {
         if (port == 0) return
         val info = NsdServiceInfo().apply {
             serviceName = "Dikiz"
             serviceType = "_dikiz._tcp"
             this.port = port
+            // Gizlilik: yalnızca rastgele kimlik. Telefonun adı ve modeli ancak kodla (/api/state) görülür.
             setAttribute("id", deviceId(this@DikizService))
-            setAttribute("model", Build.MODEL)
-            setAttribute("name", deviceName(this@DikizService).take(60))
+            setAttribute("v", "2")
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(si: NsdServiceInfo) {}

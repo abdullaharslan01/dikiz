@@ -509,6 +509,7 @@ class CameraController(
             put("evStep", s.evStep.toDouble())
             put("quality", s.quality)
             put("preset", currentPreset())
+            put("deviceName", DikizService.deviceName(context))
             put("maxFps", s.maxFps)
             put("fps", s.fps.toDouble())
             put("phonePreview", s.phonePreview)

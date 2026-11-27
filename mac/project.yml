@@ -8,8 +8,8 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.8"
-    CURRENT_PROJECT_VERSION: "9"
+    MARKETING_VERSION: "1.9"
+    CURRENT_PROJECT_VERSION: "10"
     ENABLE_HARDENED_RUNTIME: YES
 targets:
   Dikiz:
@@ -59,6 +59,8 @@ targets:
       base:
         PRODUCT_NAME: DikizMikrofon
         PRODUCT_BUNDLE_IDENTIFIER: app.dikiz.mac.mikrofon
+        # Sürücünün kendi sürümü: yalnızca sürücü kodu değişince artır (kurulu olan eskiyse şifreyle güncellenir)
+        DRIVER_VERSION: "2"
         INFOPLIST_FILE: audio/Info.plist
         WRAPPER_EXTENSION: driver
         GENERATE_INFOPLIST_FILE: NO

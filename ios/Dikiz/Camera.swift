@@ -495,6 +495,7 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
             "evStep": x.evStep,
             "quality": x.quality,
             "preset": currentQuality(),
+            "deviceName": Pairing.deviceName(),
             "maxFps": x.maxFps,
             "fps": x.fps,
             "phonePreview": x.phonePreview,
