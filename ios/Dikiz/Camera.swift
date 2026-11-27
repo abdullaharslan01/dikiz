@@ -17,9 +17,13 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
         var fps: Double = 0
         var zoom: Double = 1
         var lensStops: [Double] = [1]
+        var zoomMin: Double = 1
+        var zoomMax: Double = 1
         var hasFlash = false
         var torch = false
         var phonePreview = true
+        var isFront = false
+        var canSwitch = false
         var error: String?
     }
 
@@ -31,6 +35,7 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
     private let videoQueue = DispatchQueue(label: "dikiz.camera.video")
     private let output = AVCaptureVideoDataOutput()
     private var device: AVCaptureDevice?
+    private var input: AVCaptureDeviceInput?
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let motion = CMMotionManager()
     private let prefs = UserDefaults.standard
@@ -60,6 +65,8 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
         var hq = true
         var preset = "1280x720"
         var fov: Double = 0
+        var front = false
+        var hasFront = false
         var error: String?
     }
 
@@ -80,6 +87,7 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
         s.preset = prefs.string(forKey: "size") ?? "1280x720"
         s.hq = prefs.object(forKey: "hq") as? Bool ?? true
         s.phonePreview = prefs.object(forKey: "phonePreview") as? Bool ?? true
+        s.front = prefs.string(forKey: "position") == "front"
         lock.unlock()
     }
 
@@ -103,29 +111,63 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
     private func configure() {
         configured = true
         session.beginConfiguration()
-        defer { session.commitConfiguration() }
-
-        let types: [AVCaptureDevice.DeviceType] = [
-            .builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera, .builtInWideAngleCamera,
-        ]
-        guard let dev = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video, position: .back)
-            .devices.first,
-            let input = try? AVCaptureDeviceInput(device: dev), session.canAddInput(input)
-        else {
-            setError("Kamera açılamadı")
-            return
-        }
-        device = dev
-        session.addInput(input)
-
         let preset = Self.presets.first { $0.0 == currentPreset() }?.1 ?? .hd1280x720
         session.sessionPreset = session.canSetSessionPreset(preset) ? preset : .hd1280x720
-
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
         output.alwaysDiscardsLateVideoFrames = true
         output.setSampleBufferDelegate(self, queue: videoQueue)
         if session.canAddOutput(output) { session.addOutput(output) }
-        applyRotation(90)
+        session.commitConfiguration()
+
+        let hasFront = Self.frontDevice() != nil
+        lock.lock(); s.hasFront = hasFront; let front = s.front && hasFront; lock.unlock()
+        setupInput(front: front)
+    }
+
+    /// Arka: Kamera uygulaması gibi tüm lensleri kapsayan sanal cihaz (0.5× / 1× / 2× / 3× ya da 5×).
+    private static func backDevice() -> AVCaptureDevice? {
+        AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera, .builtInWideAngleCamera],
+            mediaType: .video, position: .back
+        ).devices.first
+    }
+
+    private static func frontDevice() -> AVCaptureDevice? {
+        AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInTrueDepthCamera, .builtInWideAngleCamera], mediaType: .video, position: .front
+        ).devices.first
+    }
+
+    /// Ön ↔ arka geçişi: girdiyi değiştirir, lens adımlarını yeniden hesaplar.
+    private func setupInput(front: Bool) {
+        guard let dev = front ? Self.frontDevice() : Self.backDevice(),
+              let newInput = try? AVCaptureDeviceInput(device: dev) else {
+            setError("Kamera açılamadı")
+            return
+        }
+        // Işık yalnızca arka kamerada; geçerken kapat.
+        if let old = device, old.hasTorch, old.torchMode != .off, (try? old.lockForConfiguration()) != nil {
+            old.torchMode = .off
+            old.unlockForConfiguration()
+        }
+        session.beginConfiguration()
+        if let old = input { session.removeInput(old) }
+        guard session.canAddInput(newInput) else {
+            if let old = input, session.canAddInput(old) { session.addInput(old) }
+            session.commitConfiguration()
+            setError("Kamera açılamadı")
+            return
+        }
+        session.addInput(newInput)
+        input = newInput
+        device = dev
+        if let c = output.connection(with: .video), c.isVideoMirroringSupported {
+            c.automaticallyAdjustsVideoMirroring = false
+            c.isVideoMirrored = front      // ön kamera ayna gibi (görüntülü görüşme alışkanlığı)
+        }
+        session.commitConfiguration()
+        lock.lock(); let a = s.rotationAngle; lock.unlock()
+        applyRotation(a)
 
         // Lensler: sanal cihazda 1.0 = en geniş lens. "1×" ana (geniş) kamera olsun diye ölçekleriz.
         let constituents = dev.constituentDevices.map(\.deviceType)
@@ -133,14 +175,19 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
         let hasUltra = constituents.contains(.builtInUltraWideCamera)
         let hasTele = constituents.contains(.builtInTelephotoCamera)
         let wide: CGFloat = hasUltra ? (switches.first ?? 1) : 1
-        var stops: [Double] = []
-        if hasUltra { stops.append(round1(Double(dev.minAvailableVideoZoomFactor / wide))) }
-        stops.append(1)
-        if hasTele, let t = switches.last, t > wide { stops.append(round1(Double(t / wide))) }
-
-        let saved = prefs.object(forKey: "zoom") as? Double ?? 1
         let zMin = Double(dev.minAvailableVideoZoomFactor / wide)
-        let zMax = Double(min(dev.maxAvailableVideoZoomFactor, wide * 10) / wide)
+        let zMax = Double(min(dev.maxAvailableVideoZoomFactor, wide * 15) / wide)
+        var stops: [Double] = []
+        if hasUltra { stops.append(round1(zMin)) }
+        stops.append(1)
+        let tele: Double? = (hasTele && (switches.last ?? 0) > wide) ? round1(Double(switches.last! / wide)) : nil
+        // 2×: Kamera uygulamasındaki gibi ana kameranın ortası (telefoto 2× değilse)
+        if !front, zMax >= 2, tele != 2 { stops.append(2) }
+        if let t = tele { stops.append(t) }
+        stops = Array(Set(stops)).sorted()
+
+        let key = front ? "zoomFront" : "zoom"
+        let saved = prefs.object(forKey: key) as? Double ?? 1
         let z = min(max(saved, zMin), zMax)
         if (try? dev.lockForConfiguration()) != nil {
             dev.videoZoomFactor = CGFloat(z) * wide
@@ -150,17 +197,30 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
         }
 
         lock.lock()
+        s.front = front
         s.wideFactor = wide
         s.lensStops = stops
         s.zoomMin = zMin; s.zoomMax = zMax; s.zoom = z
         s.hasFlash = dev.hasTorch
+        s.torch = false
+        s.focusLocked = false; s.manualFocus = nil; s.aeLock = false; s.awbLock = false
         s.evStep = 0.5
         s.evMin = max(-6, Int((dev.minExposureTargetBias / 0.5).rounded(.up)))
         s.evMax = min(6, Int((dev.maxExposureTargetBias / 0.5).rounded(.down)))
+        s.ev = 0
         s.fov = Double(dev.activeFormat.videoFieldOfView)
         s.error = nil
         lock.unlock()
         publishUI()
+    }
+
+    /// Arayüzden: ön ↔ arka.
+    func switchCamera() {
+        sessionQueue.async {
+            self.lock.lock(); let f = !self.s.front && self.s.hasFront; self.lock.unlock()
+            self.prefs.set(f ? "front" : "back", forKey: "position")
+            self.setupInput(front: f)
+        }
     }
 
     private func currentPreset() -> String { lock.lock(); defer { lock.unlock() }; return s.preset }
@@ -196,8 +256,11 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
     }
 
     private func applyRotation(_ a: CGFloat) {
-        guard let c = output.connection(with: .video), c.isVideoRotationAngleSupported(a) else { return }
-        c.videoRotationAngle = a
+        lock.lock(); let front = s.front; lock.unlock()
+        // Ön kamerada yatay duruşlar ters döner (algılayıcı arka kameraya göre 180° çevrik).
+        let angle = front && (a == 0 || a == 180) ? 180 - a : a
+        guard let c = output.connection(with: .video), c.isVideoRotationAngleSupported(angle) else { return }
+        c.videoRotationAngle = angle
     }
 
     // MARK: - Kareler
@@ -256,9 +319,18 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
             let zz = min(max(z, s.zoomMin), s.zoomMax)
             s.zoom = zz
             let wide = s.wideFactor
+            let front = s.front
             lock.unlock()
-            prefs.set(zz, forKey: "zoom")
+            prefs.set(zz, forKey: front ? "zoomFront" : "zoom")
             withDevice { $0.videoZoomFactor = CGFloat(zz) * wide }
+        case "camera":
+            // İzleme sayfası: "front" / "back" (Android'de kamera kimliği).
+            lock.lock(); let hasFront = s.hasFront; let cur = s.front; lock.unlock()
+            let f = value == "front" && hasFront
+            if f != cur {
+                prefs.set(f ? "front" : "back", forKey: "position")
+                setupInput(front: f)
+            }
         case "torch":
             withDevice { d in
                 guard d.hasTorch else { return }
@@ -360,7 +432,9 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
     private func publishUI() {
         lock.lock()
         let u = UIState(width: s.width, height: s.height, fps: s.fps, zoom: s.zoom, lensStops: s.lensStops,
-                        hasFlash: s.hasFlash, torch: s.torch, phonePreview: s.phonePreview, error: s.error)
+                        zoomMin: s.zoomMin, zoomMax: s.zoomMax,
+                        hasFlash: s.hasFlash, torch: s.torch, phonePreview: s.phonePreview,
+                        isFront: s.front, canSwitch: s.hasFront, error: s.error)
         lock.unlock()
         DispatchQueue.main.async { if self.ui != u { self.ui = u } }
     }
@@ -371,8 +445,9 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
         let x = s
         lock.unlock()
         let dict: [String: Any] = [
-            "cameras": [["id": "0", "label": "Arka kamera", "fov": x.fov]],
-            "cameraId": "0",
+            "cameras": [["id": "back", "label": "Arka kamera", "facing": "back"]]
+                + (x.hasFront ? [["id": "front", "label": "Ön kamera", "facing": "front"]] : []),
+            "cameraId": x.front ? "front" : "back",
             "sizes": Self.presets.map(\.0),
             "targetSize": x.preset,
             "width": x.width,

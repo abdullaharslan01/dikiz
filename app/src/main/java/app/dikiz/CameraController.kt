@@ -457,7 +457,14 @@ class CameraController(
         val s = state.value
         return JSONObject().apply {
             put("cameras", JSONArray().apply {
-                s.cameras.forEach { c -> put(JSONObject().put("id", c.id).put("label", c.label).put("fov", c.fov)) }
+                s.cameras.forEach { c ->
+                    val facing = when (c.facing) {
+                        CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                        CameraCharacteristics.LENS_FACING_BACK -> "back"
+                        else -> "external"
+                    }
+                    put(JSONObject().put("id", c.id).put("label", c.label).put("fov", c.fov).put("facing", facing))
+                }
             })
             put("cameraId", s.cameraId)
             put("sizes", JSONArray().apply { s.sizes.forEach { put(it.toString()) } })

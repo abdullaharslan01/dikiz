@@ -15,14 +15,16 @@ final class HttpServer {
     private let q = DispatchQueue(label: "dikiz.http")
     private let hub: FrameHub
     private let camera: CameraController
+    private let audio: AudioHub
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private(set) var code: String
     private(set) var port: UInt16 = 0
 
-    init(hub: FrameHub, camera: CameraController, code: String) {
+    init(hub: FrameHub, camera: CameraController, audio: AudioHub, code: String) {
         self.hub = hub
         self.camera = camera
+        self.audio = audio
         self.code = code
     }
 
@@ -146,6 +148,8 @@ final class HttpServer {
             send(c, 200, "text/html; charset=utf-8", Data(html.replacingOccurrences(of: "__CODE__", with: code).utf8))
         case "stream":
             stream(c)
+        case "audio":
+            audioStream(c)
         case "snapshot.jpg":
             hub.nextFrame(timeout: 2.5, queue: q) { [weak self] f in
                 guard let self else { return }
@@ -179,6 +183,7 @@ final class HttpServer {
         switch status {
         case 200: reason = "OK"
         case 404: reason = "Not Found"
+        case 403: reason = "Forbidden"
         case 429: reason = "Too Many Requests"
         case 503: reason = "Service Unavailable"
         default: reason = "Error"
@@ -237,6 +242,56 @@ final class HttpServer {
                 })
             }
         }
+        let prev = c.stateUpdateHandler
+        c.stateUpdateHandler = { [weak self] st in
+            prev?(st)
+            switch st {
+            case .failed, .cancelled: self?.q.async(execute: close)
+            default: break
+            }
+        }
+    }
+
+    // MARK: - Mikrofon yayını (ham PCM s16le, 48 kHz, mono)
+
+    private func audioStream(_ c: NWConnection) {
+        var closed = false
+        var inflight = 0
+        var subId: UUID?
+        let close: () -> Void = { [weak self] in
+            guard !closed else { return }
+            closed = true
+            if let id = subId { self?.audio.leave(id) }
+            c.cancel()
+        }
+        subId = audio.join { [weak self] chunk in
+            guard let self else { return }
+            self.q.async {
+                // Yavaş istemcide sesi biriktirme: 10 parçadan (~200 ms) fazlası beklerse at.
+                guard !closed, inflight < 10 else { return }
+                inflight += 1
+                c.send(content: chunk, completion: .contentProcessed { err in
+                    self.q.async {
+                        inflight -= 1
+                        if err != nil { close() }
+                    }
+                })
+            }
+        }
+        guard subId != nil else {
+            return send(c, 403, "text/plain; charset=utf-8", Data("Mikrofon izni yok".utf8))
+        }
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: \(AudioHub.contentType)\r\n" +
+            "Cache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+        c.send(content: Data(head.utf8), completion: .contentProcessed { err in
+            if err != nil { self.q.async(execute: close) }
+        })
+        func watchEOF() {
+            c.receive(minimumIncompleteLength: 1, maximumLength: 1024) { [weak self] _, _, done, err in
+                if done || err != nil { self?.q.async(execute: close) } else { watchEOF() }
+            }
+        }
+        watchEOF()
         let prev = c.stateUpdateHandler
         c.stateUpdateHandler = { [weak self] st in
             prev?(st)

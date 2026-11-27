@@ -30,6 +30,7 @@ struct DikizApp: App {
 final class AppModel: ObservableObject {
     let hub = FrameHub()
     let camera: CameraController
+    let audio = AudioHub()
     private let server: HttpServer
 
     @Published var authorized = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
@@ -38,13 +39,15 @@ final class AppModel: ObservableObject {
     @Published var port: UInt16 = 0
     @Published var addresses: [String] = Pairing.localAddresses()
     @Published var clients = 0
+    @Published var listeners = 0
     private var started = false
     private var addrTimer: Timer?
 
     init() {
         camera = CameraController(hub: hub)
-        server = HttpServer(hub: hub, camera: camera, code: Pairing.code())
+        server = HttpServer(hub: hub, camera: camera, audio: audio, code: Pairing.code())
         hub.onClientsChanged = { [weak self] n in self?.clients = n }
+        audio.onListenersChanged = { [weak self] n in self?.listeners = n }
     }
 
     func resume() {
@@ -81,6 +84,8 @@ final class AppModel: ObservableObject {
 
     private func begin() {
         camera.start()
+        // Mikrofonu baştan sor: Mac'ten dinlenmek istendiğinde telefon başında kimse olmayabilir.
+        if AVAudioApplication.shared.recordPermission == .undetermined { AudioHub.permission { _ in } }
         if !started {
             started = true
             server.start { [weak self] p in self?.port = p }
@@ -102,6 +107,7 @@ struct ContentView: View {
     @State private var showCode = false
     @State private var dimmed = false
     @State private var savedBrightness: CGFloat = 0.5
+    @State private var pinchStart: Double?
 
     private var prettyCode: String {
         let c = model.code
@@ -116,6 +122,15 @@ struct ContentView: View {
             if model.authorized {
                 if camera.ui.phonePreview {
                     CameraPreview(session: camera.session).ignoresSafeArea()
+                        .gesture(
+                            MagnifyGesture()
+                                .onChanged { v in
+                                    if pinchStart == nil { pinchStart = camera.ui.zoom }
+                                    let z = min(max((pinchStart ?? 1) * v.magnification, camera.ui.zoomMin), camera.ui.zoomMax)
+                                    camera.set("zoom", String(format: "%.2f", z))
+                                }
+                                .onEnded { _ in pinchStart = nil }
+                        )
                 }
             } else {
                 VStack(spacing: 16) {
@@ -177,6 +192,10 @@ struct ContentView: View {
                         Text("·  \(min(camera.ui.width, camera.ui.height))p · \(Int(camera.ui.fps.rounded())) fps")
                             .font(.system(size: 13)).foregroundStyle(Muted)
                     }
+                    if model.listeners > 0 {
+                        Image(systemName: "mic.fill").font(.system(size: 13))
+                            .foregroundStyle(Color(red: 1, green: 0.54, blue: 0.5))
+                    }
                 } else if model.port == 0 || model.addresses.isEmpty {
                     Image(systemName: "wifi.slash").foregroundStyle(Color(red: 1, green: 0.54, blue: 0.5))
                     Text("Wi‑Fi'yi aç (Mac ile aynı ağ)").font(.system(size: 14)).foregroundStyle(.white)
@@ -206,8 +225,10 @@ struct ContentView: View {
             if camera.ui.lensStops.count > 1 {
                 HStack(spacing: 4) {
                     ForEach(camera.ui.lensStops, id: \.self) { z in
-                        let on = abs(z - camera.ui.zoom) < 0.06
-                        let label = (z == z.rounded() ? String(Int(z)) : String(format: "%.1f", z)) + (on ? "×" : "")
+                        let on = abs(z - camera.ui.zoom) < 0.06 ||
+                            (z == camera.ui.lensStops.last(where: { $0 <= camera.ui.zoom + 0.001 }) && !camera.ui.lensStops.contains { abs($0 - camera.ui.zoom) < 0.06 })
+                        let shown = on && abs(z - camera.ui.zoom) >= 0.06 ? camera.ui.zoom : z
+                        let label = (shown == shown.rounded() ? String(Int(shown)) : String(format: "%.1f", shown)) + (on ? "×" : "")
                         Button { camera.set("zoom", String(z)) } label: {
                             Text(label)
                                 .font(.system(size: on ? 14 : 12, weight: .semibold))
@@ -222,6 +243,11 @@ struct ContentView: View {
                 .background(Glass, in: Capsule())
             }
             HStack(spacing: 20) {
+                if camera.ui.canSwitch {
+                    RoundAction(symbol: "arrow.triangle.2.circlepath.camera", label: camera.ui.isFront ? "Arka" : "Ön") {
+                        camera.switchCamera()
+                    }
+                }
                 if camera.ui.hasFlash {
                     RoundAction(symbol: "flashlight.on.fill", label: "Işık", active: camera.ui.torch) {
                         camera.set("torch", camera.ui.torch ? "0" : "1")
