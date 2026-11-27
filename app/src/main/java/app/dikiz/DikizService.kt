@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
  */
 class DikizService : LifecycleService() {
 
-    class Running(val camera: CameraController, val hub: FrameHub, val port: Int, val code: String, val server: HttpServer)
+    class Running(val camera: CameraController, val hub: FrameHub, val port: Int, val code: String, val server: HttpServer, val audio: AudioHub)
 
     private var server: HttpServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -34,13 +34,13 @@ class DikizService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        val type = if (Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0
-        ServiceCompat.startForeground(this, NOTIF_ID, buildNotification(), type)
+        goForeground()
 
         val hub = FrameHub()
         val camera = CameraController(this, this, hub)
         val code = accessCode(this)
-        val srv = HttpServer(this, hub, camera, code)
+        val audio = AudioHub(this)
+        val srv = HttpServer(this, hub, camera, code, audio)
         val port = srv.start()
         server = srv
         camera.start()
@@ -49,7 +49,7 @@ class DikizService : LifecycleService() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Dikiz:stream")
             .apply { acquire(4 * 60 * 60 * 1000L) }
 
-        running.value = Running(camera, hub, port, code, srv)
+        running.value = Running(camera, hub, port, code, srv, audio)
         advertise(port)
 
         // Telefonun duruşunu izle (dik / yatay / ters) → görüntü hep düz gider.
@@ -99,12 +99,25 @@ class DikizService : LifecycleService() {
         }
     }
 
+    /** Mikrofon izni varsa ön plan türüne mikrofonu da ekle (Android 14: arka planda ses için şart). */
+    private fun goForeground() {
+        var type = 0
+        if (Build.VERSION.SDK_INT >= 30) {
+            type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            val mic = ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (mic) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+        ServiceCompat.startForeground(this, NOTIF_ID, buildNotification(), type)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         if (intent?.action == ACTION_STOP) {
             stopSelf()
             return START_NOT_STICKY
         }
+        runCatching { goForeground() }   // izin sonradan verildiyse mikrofon türünü ekle
         return START_NOT_STICKY
     }
 
@@ -179,7 +192,7 @@ class DikizService : LifecycleService() {
             context.getSharedPreferences("app", MODE_PRIVATE).edit().putString("pin", c).apply()
             running.value?.let { r ->
                 r.server.changeCode(c)
-                running.value = Running(r.camera, r.hub, r.port, c, r.server)
+                running.value = Running(r.camera, r.hub, r.port, c, r.server, r.audio)
             }
         }
 

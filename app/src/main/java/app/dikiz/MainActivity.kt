@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.FlashlightOn
 import androidx.compose.material.icons.rounded.Laptop
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PanoramaWideAngle
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.WifiOff
@@ -85,7 +86,7 @@ class MainActivity : ComponentActivity() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     private fun requestPermissions() {
-        val perms = mutableListOf(Manifest.permission.CAMERA)
+        val perms = mutableListOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
         if (android.os.Build.VERSION.SDK_INT >= 33) perms += Manifest.permission.POST_NOTIFICATIONS
         permissionLauncher.launch(perms.toTypedArray())
     }
@@ -96,7 +97,16 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         hasPermission.value = cameraGranted()
-        if (hasPermission.value) DikizService.start(this) else requestPermissions()
+        if (hasPermission.value) {
+            DikizService.start(this)
+            // Eski sürümden gelenler: kamera izni var, mikrofon hiç sorulmamış → bir kez sor (ses aktarımı için).
+            val prefs = getSharedPreferences("app", MODE_PRIVATE)
+            val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            if (!micGranted && !prefs.getBoolean("askedMic", false)) {
+                prefs.edit().putBoolean("askedMic", true).apply()
+                permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+            }
+        } else requestPermissions()
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Accent)) {
@@ -118,6 +128,7 @@ class MainActivity : ComponentActivity() {
                     DikizScreen(
                         camera = r.camera,
                         hub = r.hub,
+                        audio = r.audio,
                         port = r.port,
                         code = r.code,
                         onPreviewView = { pv ->
@@ -159,6 +170,7 @@ class MainActivity : ComponentActivity() {
 private fun DikizScreen(
     camera: CameraController,
     hub: FrameHub,
+    audio: AudioHub,
     port: Int,
     code: String,
     onPreviewView: (PreviewView?) -> Unit,
@@ -171,6 +183,7 @@ private fun DikizScreen(
     val prettyCode = if (code.length == 6) code.chunked(3).joinToString(" ") else code
     val state by camera.state.collectAsState()
     val clients by hub.clientCount.collectAsState()
+    val listeners by audio.listeners.collectAsState()
     var addresses by remember { mutableStateOf(HttpServer.localAddresses()) }
     var dimmed by remember { mutableStateOf(false) }
 
@@ -233,6 +246,10 @@ private fun DikizScreen(
                                 "  ·  ${state.height}p · ${"%.0f".format(state.fps)} fps",
                                 color = Muted, fontSize = 13.sp, maxLines = 1,
                             )
+                        }
+                        if (listeners > 0) {
+                            Spacer(Modifier.width(8.dp))
+                            Icon(Icons.Rounded.Mic, "Ses gidiyor", tint = Color(0xFFFF8A80), modifier = Modifier.size(16.dp))
                         }
                     }
                 }

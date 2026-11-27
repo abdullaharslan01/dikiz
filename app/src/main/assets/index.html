@@ -128,6 +128,8 @@
 <symbol id="ti-flip-vertical" viewBox="0 0 24 24"><path d="M12 3l0 18"/><path d="M16 7l0 10l5 0l-5 -10"/><path d="M8 7l0 10l-5 0l5 -10"/></symbol>
 <symbol id="ti-line-dashed" viewBox="0 0 24 24"><path d="M5 12h2"/><path d="M17 12h2"/><path d="M11 12h2"/></symbol>
 <symbol id="ti-microphone-off" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M9 5a3 3 0 0 1 6 0v5a3 3 0 0 1 -.13 .874m-2 2a3 3 0 0 1 -3.87 -2.872v-1"/><path d="M5 10a7 7 0 0 0 10.846 5.85m2 -2a6.967 6.967 0 0 0 1.152 -3.85"/><path d="M8 21l8 0"/><path d="M12 17l0 4"/></symbol>
+<symbol id="ti-volume" viewBox="0 0 24 24"><path d="M15 8a5 5 0 0 1 0 8"/><path d="M17.7 5a9 9 0 0 1 0 14"/><path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5"/></symbol>
+<symbol id="ti-volume-off" viewBox="0 0 24 24"><path d="M15 8a5 5 0 0 1 1.912 4.934m-1.377 2.602a5 5 0 0 1 -.535 .464"/><path d="M17.7 5a9 9 0 0 1 2.362 11.086m-1.676 2.299a9 9 0 0 1 -.686 .615"/><path d="M9.069 5.054l.431 -.554a.8 .8 0 0 1 1.5 .5v2m0 4v8a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l1.294 -1.664"/><path d="M3 3l18 18"/></symbol>
 <symbol id="ti-microphone" viewBox="0 0 24 24"><path d="M9 2m0 3a3 3 0 0 1 3 -3h0a3 3 0 0 1 3 3v5a3 3 0 0 1 -3 3h0a3 3 0 0 1 -3 -3z"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M8 21l8 0"/><path d="M12 17l0 4"/></symbol>
 <symbol id="ti-player-pause" viewBox="0 0 24 24"><path d="M6 5m0 1a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1z"/><path d="M14 5m0 1a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1z"/></symbol>
 <symbol id="ti-player-play" viewBox="0 0 24 24"><path d="M7 4v16l13 -8z"/></symbol>
@@ -156,6 +158,7 @@
   <span class="sep"></span>
   <button class="ib" id="bTorchBar" title="Telefonun ışığı: gölgeli yerleri aydınlatır (T) — sesle: “ışık”"><svg class="ti"><use href="#ti-bulb"/></svg><span>Işık</span></button>
   <button class="ib" id="bFront" title="Ön ayna: Mac kamerasıyla yüzünü ve yanları da göster (W) — sesle: “ön”"><svg class="ti"><use href="#ti-device-laptop"/></svg><span>Ön ayna</span></button>
+  <button class="ib" id="bListen" title="Telefonun mikrofonunu dinle (D)"><svg class="ti"><use href="#ti-volume-off"/></svg><span>Dinle</span></button>
   <button class="ib" id="bVoice" title="Sesli komut (V): eller serbest"><svg class="ti"><use href="#ti-microphone"/></svg><span>Ses</span></button>
   <span class="sep"></span>
   <button class="ib" id="bPanel" title="Diğer araçlar ve ayarlar"><svg class="ti"><use href="#ti-adjustments"/></svg><span>Daha</span></button>
@@ -252,6 +255,7 @@
     <tr><td><b>M</b></td><td>Ayna (sağ-sol ters)</td></tr>
     <tr><td><b>1</b> / <b>2</b> / <b>3</b></td><td>Bölge: Arka / Sol / Sağ (her birinin yakınlaştırması ayrı hatırlanır)</td></tr>
     <tr><td><b>V</b></td><td>Sesli komut aç/kapat</td></tr>
+    <tr><td><b>D</b></td><td>Telefonun mikrofonunu dinle</td></tr>
     <tr><td><b>W</b></td><td>Ön ayna (Mac kamerası) aç/kapat</td></tr>
     <tr><td><b>Shift+V</b></td><td>Dikey çevir</td></tr>
     <tr><td><b>R</b> / <b>Shift+R</b></td><td>90° sağa / sola döndür</td></tr>
@@ -554,6 +558,55 @@
   $('bTorchBar').onclick = act.torch;
   $('bFront').onclick = () => frontToggle();
   $('bVoice').onclick = () => voiceToggle();
+  $('bListen').onclick = () => listenToggle();
+
+  // ---------- telefon mikrofonunu dinle: /audio → ham PCM s16le 48 kHz mono ----------
+  // Ses bir AudioWorklet halkasında ~120 ms tamponlanır; geride kalırsa eski parçalar atılır.
+  var listenCtx = null, listenAbort = null, listenOn = false;
+  const WORKLET = `class P extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(48000);this.r=0;this.w=0;this.n=0;this.started=false;
+    this.port.onmessage=e=>{const d=e.data;for(let i=0;i<d.length;i++){this.b[this.w]=d[i];this.w=(this.w+1)%this.b.length;}this.n=Math.min(this.b.length,this.n+d.length);
+    if(this.n>14400){const drop=this.n-5760;this.r=(this.r+drop)%this.b.length;this.n-=drop;}};}
+    process(i,o){const out=o[0][0];if(!this.started){if(this.n<5760){out.fill(0);return true;}this.started=true;}
+    for(let k=0;k<out.length;k++){if(this.n>0){out[k]=this.b[this.r];this.r=(this.r+1)%this.b.length;this.n--;}else{out[k]=0;this.started=false;}}
+    for(let c=1;c<o[0].length;c++)o[0][c].set(out);return true;}}registerProcessor('pcm',P);`;
+  async function listenToggle() {
+    if (listenOn) { listenStop(); return; }
+    listenOn = true; syncUI();
+    try {
+      listenCtx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+      await listenCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' })));
+      const node = new AudioWorkletNode(listenCtx, 'pcm', { outputChannelCount: [2] });
+      node.connect(listenCtx.destination);
+      listenAbort = new AbortController();
+      const res = await fetch(BASE + '/audio', { signal: listenAbort.signal, cache: 'no-store' });
+      if (res.status === 403) { toast('Telefonda mikrofon izni yok'); listenStop(); return; }
+      if (!res.ok) throw new Error(res.status);
+      toast('Telefonun sesi geliyor');
+      const reader = res.body.getReader();
+      let rest = null;
+      while (listenOn) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        let bytes = value;
+        if (rest) { const m = new Uint8Array(rest.length + value.length); m.set(rest); m.set(value, rest.length); bytes = m; rest = null; }
+        const even = bytes.length & ~1;
+        if (even < bytes.length) rest = bytes.slice(even);
+        const dv = new DataView(bytes.buffer, bytes.byteOffset, even);
+        const f = new Float32Array(even / 2);
+        for (let i = 0; i < f.length; i++) f[i] = dv.getInt16(i * 2, true) / 32768;
+        node.port.postMessage(f, [f.buffer]);
+      }
+      if (listenOn) { listenStop(); toast('Ses bağlantısı kesildi'); }
+    } catch (err) {
+      if (listenOn) { listenStop(); toast('Ses açılamadı'); }
+    }
+  }
+  function listenStop() {
+    listenOn = false;
+    try { listenAbort && listenAbort.abort(); } catch (_) {}
+    try { listenCtx && listenCtx.close(); } catch (_) {}
+    listenAbort = null; listenCtx = null; syncUI();
+  }
   [1, 2, 3].forEach(n => $('r' + n).onclick = () => setRegion(n));
 
   // ---------- gelişmiş kamera (lens, odak, kilitler) ----------
@@ -702,7 +755,7 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key, step = 40;
     const map = {
-      m: act.mirror, M: act.mirror, v: () => voiceToggle(), V: act.flipV,
+      m: act.mirror, M: act.mirror, v: () => voiceToggle(), V: act.flipV, d: () => listenToggle(), D: () => listenToggle(),
       w: () => frontToggle(), W: () => frontToggle(),
       '1': () => setRegion(1), '2': () => setRegion(2), '3': () => setRegion(3),
       r: act.rotR, R: act.rotL, g: act.grid, G: act.grid, l: act.guide, L: act.guide,
@@ -746,6 +799,8 @@
     [1, 2, 3].forEach(n => $('r' + n).classList.toggle('on', V.region === n));
     $('bFront').classList.toggle('on', !!frontStream);
     $('bVoice').classList.toggle('on', listening);
+    $('bListen').classList.toggle('on', listenOn);
+    $('bListen').querySelector('use').setAttribute('href', listenOn ? '#ti-volume' : '#ti-volume-off');
     $('bVoice').querySelector('use').setAttribute('href', listening ? '#ti-microphone' : '#ti-microphone-off');
     $('bFreeze').querySelector('use').setAttribute('href', frozen ? '#ti-player-play' : '#ti-player-pause');
     $('bFreeze').querySelector('span').textContent = frozen ? 'Devam' : 'Dondur';

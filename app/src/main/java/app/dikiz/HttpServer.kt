@@ -22,6 +22,7 @@ import java.util.concurrent.Executors
  *  /{kod}/snapshot.jpg-> tek kare
  *  /{kod}/api/state   -> JSON durum
  *  /{kod}/api/set?k=v -> ayar değiştir
+ *  /{kod}/audio       -> telefon mikrofonu: ham PCM s16le, mono, 48 kHz (yalnızca dinlenirken açık)
  *
  * Kod (eşleşme kodu) yalnızca telefon ekranında görünür; Bonjour ilanında yer almaz.
  * Böylece aynı ağdaki başkası kamerayı açamaz. Yanlış kod denemeleri adres başına sınırlanır.
@@ -31,6 +32,7 @@ class HttpServer(
     private val hub: FrameHub,
     private val camera: CameraController,
     initialCode: String,
+    private val audio: AudioHub,
 ) {
     @Volatile var code: String = initialCode
         private set
@@ -135,6 +137,7 @@ class HttpServer(
                     send(out, 200, "text/html; charset=utf-8", html.toByteArray())
                 }
                 "stream" -> stream(out)
+                "audio" -> audioStream(out)
                 "snapshot.jpg" -> {
                     hub.requestFramesFor(3000)
                     val since = hub.latest?.seq ?: 0L
@@ -191,8 +194,27 @@ class HttpServer(
         }
     }
 
+    private fun audioStream(out: OutputStream) {
+        val client = audio.join()
+            ?: return send(out, 403, "text/plain; charset=utf-8", "Mikrofon izni yok".toByteArray())
+        try {
+            out.write(
+                ("HTTP/1.1 200 OK\r\nContent-Type: ${AudioHub.CONTENT_TYPE}\r\n" +
+                    "Cache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n").toByteArray()
+            )
+            out.flush()
+            while (running) {
+                val chunk = client.queue.poll(2, java.util.concurrent.TimeUnit.SECONDS) ?: continue
+                out.write(chunk)
+                out.flush()
+            }
+        } finally {
+            audio.leave(client)
+        }
+    }
+
     private fun send(out: OutputStream, status: Int, type: String, body: ByteArray) {
-        val reason = when (status) { 200 -> "OK"; 404 -> "Not Found"; 429 -> "Too Many Requests"; 503 -> "Service Unavailable"; else -> "OK" }
+        val reason = when (status) { 200 -> "OK"; 404 -> "Not Found"; 403 -> "Forbidden"; 429 -> "Too Many Requests"; 503 -> "Service Unavailable"; else -> "OK" }
         out.write(
             ("HTTP/1.1 $status $reason\r\nContent-Type: $type\r\nContent-Length: ${body.size}\r\n" +
                 "Cache-Control: no-store\r\nConnection: close\r\n\r\n").toByteArray()
