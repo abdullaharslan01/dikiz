@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
  */
 class DikizService : LifecycleService() {
 
-    class Running(val camera: CameraController, val hub: FrameHub, val port: Int, val code: String, val server: HttpServer, val audio: AudioHub)
+    class Running(val camera: CameraController, val hub: FrameHub, val port: Int, val code: String, val server: HttpServer, val audio: AudioHub, val speaker: SpeakerSink)
 
     private var server: HttpServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -40,7 +40,8 @@ class DikizService : LifecycleService() {
         val camera = CameraController(this, this, hub)
         val code = accessCode(this)
         val audio = AudioHub(this)
-        val srv = HttpServer(this, hub, camera, code, audio)
+        val speaker = SpeakerSink()
+        val srv = HttpServer(this, hub, camera, code, audio, speaker)
         val port = srv.start()
         server = srv
         camera.start()
@@ -49,7 +50,7 @@ class DikizService : LifecycleService() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Dikiz:stream")
             .apply { acquire(4 * 60 * 60 * 1000L) }
 
-        running.value = Running(camera, hub, port, code, srv, audio)
+        running.value = Running(camera, hub, port, code, srv, audio, speaker)
         advertise(port)
 
         // Telefonun duruşunu izle (dik / yatay / ters) → görüntü hep düz gider.
@@ -192,7 +193,7 @@ class DikizService : LifecycleService() {
             context.getSharedPreferences("app", MODE_PRIVATE).edit().putString("pin", c).apply()
             running.value?.let { r ->
                 r.server.changeCode(c)
-                running.value = Running(r.camera, r.hub, r.port, c, r.server, r.audio)
+                running.value = Running(r.camera, r.hub, r.port, c, r.server, r.audio, r.speaker)
             }
         }
 

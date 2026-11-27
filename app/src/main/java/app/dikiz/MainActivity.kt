@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.FlashlightOn
 import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.PanoramaWideAngle
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.WifiOff
@@ -132,6 +133,7 @@ class MainActivity : ComponentActivity() {
                         camera = r.camera,
                         hub = r.hub,
                         audio = r.audio,
+                        speaker = r.speaker,
                         port = r.port,
                         code = r.code,
                         onPreviewView = { pv ->
@@ -174,6 +176,7 @@ private fun DikizScreen(
     camera: CameraController,
     hub: FrameHub,
     audio: AudioHub,
+    speaker: SpeakerSink,
     port: Int,
     code: String,
     onPreviewView: (PreviewView?) -> Unit,
@@ -187,6 +190,7 @@ private fun DikizScreen(
     val state by camera.state.collectAsState()
     val clients by hub.clientCount.collectAsState()
     val listeners by audio.listeners.collectAsState()
+    val macSound by speaker.playing.collectAsState()
     var addresses by remember { mutableStateOf(HttpServer.localAddresses()) }
     var dimmed by remember { mutableStateOf(false) }
 
@@ -213,7 +217,7 @@ private fun DikizScreen(
         // ---- Üst: tek satırlık bağlantı rozeti (tek başına, ortada) ----
         Box(Modifier.align(Alignment.TopCenter).safeDrawingPadding().padding(top = 12.dp, start = 16.dp, end = 16.dp)) {
             val mode = when {
-                clients > 0 -> 2
+                clients > 0 || listeners > 0 || macSound -> 2
                 port == 0 || addresses.isEmpty() -> 0
                 else -> 1
             }
@@ -244,11 +248,15 @@ private fun DikizScreen(
                         Box(Modifier.size(8.dp).clip(CircleShape).background(Live))
                         Spacer(Modifier.width(8.dp))
                         Text("Mac'e bağlı", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        if (state.width > 0) {
+                        if (state.width > 0 && clients > 0) {
                             Text(
                                 "  ·  ${state.height}p · ${"%.0f".format(state.fps)} fps",
                                 color = Muted, fontSize = 13.sp, maxLines = 1,
                             )
+                        }
+                        if (macSound) {
+                            Spacer(Modifier.width(8.dp))
+                            Icon(Icons.Rounded.VolumeUp, "Mac sesi çalıyor", tint = Accent, modifier = Modifier.size(16.dp))
                         }
                         if (listeners > 0) {
                             Spacer(Modifier.width(8.dp))

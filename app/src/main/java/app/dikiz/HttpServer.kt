@@ -23,6 +23,7 @@ import java.util.concurrent.Executors
  *  /{kod}/api/state   -> JSON durum
  *  /{kod}/api/set?k=v -> ayar değiştir
  *  /{kod}/audio       -> telefon mikrofonu: ham PCM s16le, mono, 48 kHz (yalnızca dinlenirken açık)
+ *  POST /{kod}/speaker -> Mac'in sesi: ham PCM s16le, stereo, 48 kHz; telefon hoparlöründen çalar
  *
  * Kod (eşleşme kodu) yalnızca telefon ekranında görünür; Bonjour ilanında yer almaz.
  * Böylece aynı ağdaki başkası kamerayı açamaz. Yanlış kod denemeleri adres başına sınırlanır.
@@ -33,6 +34,7 @@ class HttpServer(
     private val camera: CameraController,
     initialCode: String,
     private val audio: AudioHub,
+    private val speaker: SpeakerSink,
 ) {
     @Volatile var code: String = initialCode
         private set
@@ -138,6 +140,12 @@ class HttpServer(
                 }
                 "stream" -> stream(out)
                 "audio" -> audioStream(out)
+                "speaker" -> {
+                    if (parts[0] != "POST") return send(out, 404, "text/plain", "yok".toByteArray())
+                    out.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n".toByteArray())
+                    out.flush()
+                    speaker.play(input)
+                }
                 "snapshot.jpg" -> {
                     hub.requestFramesFor(3000)
                     val since = hub.latest?.seq ?: 0L
