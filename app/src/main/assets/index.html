@@ -66,6 +66,11 @@
   #panel .seg.regions{margin:4px 0 6px}
   #panel .seg.regions button{flex:1}
   #lensBar:empty{display:none}
+  #selQual{align-self:center;background:#0e141c;color:#e8edf3;border:1px solid var(--line);border-radius:10px;padding:7px 8px;margin:0 4px;font:600 12px system-ui}
+  #audioOnly{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;color:var(--muted);font:15px system-ui}
+  body.audio #audioOnly{display:flex}
+  body.audio #stage{visibility:hidden}
+  #audioOnly svg{width:72px;height:72px;stroke:#f5b841;fill:none;stroke-width:1.5}
   #lensBar:empty + #bCamSwitch[style*="none"] + .sep{display:none}
   #lensBar button{min-width:44px}
   /* yön sihirbazı */
@@ -146,6 +151,7 @@
 
 <div id="front"><video id="fv" autoplay muted playsinline></video><div class="tag">Ön · Mac kamerası</div></div>
 <div id="vhud"><span class="mic"></span><span>Dinliyorum</span><b id="vlast"></b></div>
+<div id="audioOnly"><svg viewBox="0 0 24 24"><use href="#ti-volume"/></svg><div>Yalnızca ses · görüntü kapalı</div><div style="font-size:12px">Ses gelmiyorsa <b>Dinle</b>'ye bas · görüntü için kaliteyi seç</div></div>
 <div id="toast"></div>
 <div id="cmdflash"></div>
 
@@ -156,6 +162,11 @@
   <button class="ib" id="bFreeze" title="Dondur (Boşluk)"><svg class="ti"><use href="#ti-player-pause"/></svg><span>Dondur</span></button>
   <button class="ib" id="bSave" title="Fotoğraf kaydet (S)"><svg class="ti"><use href="#ti-camera"/></svg><span>Fotoğraf</span></button>
   <button class="ib" id="bTorchBar" title="Telefonun ışığı (T)"><svg class="ti"><use href="#ti-bulb"/></svg><span>Işık</span></button>
+  <select id="selQual" title="Görüntü kalitesi: internet yavaşsa düşür. Yalnızca ses: görüntü gelmez.">
+    <option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option>
+    <option value="360">360p</option><option value="240">240p</option><option value="144">144p</option>
+    <option value="audio">Yalnızca ses</option>
+  </select>
   <button class="ib" id="bListen" title="Telefonun mikrofonunu dinle (D)"><svg class="ti"><use href="#ti-volume-off"/></svg><span>Dinle</span></button>
   <span class="sep"></span>
   <button class="ib" id="bMirror" title="Sağ-sol ters çevir (M)"><svg class="ti"><use href="#ti-arrows-left-right"/></svg><span>Ayna</span></button>
@@ -302,14 +313,14 @@
   // ---------- görünüm durumu (tarayıcıda saklanır) ----------
   const DEF = {r:0, fine:0, fh:false, fv:false, z:1, px:0, py:0, grid:false, guide:false, gy:0.5, gy2:0.65, gx:0.5,
                br:100, ct:100, ovMode:'off', op:50, sharp:false, calibrated:false,
-               region:1, regions:{}, front:false, voice:false};
+               region:1, regions:{}, front:false, voice:false, qual:'', audioOnly:false};
   let V = Object.assign({}, DEF);
   try { Object.assign(V, JSON.parse(localStorage.getItem('dikiz-view') || '{}')); } catch (e) {}
   if (V.ovMode === 'ref') V.ovMode = 'off';   // referans kare yeniden yüklemede saklanmaz
   const ov = document.getElementById('ov');
   let refData = null;
   const save = () => {
-    // Her bölgenin (Arka / Sol / Sağ) yakınlaştırma-kaydırma ayarını ayrı tut
+    // Her görünümün yakınlaştırma-kaydırma ayarını ayrı tut
     V.regions[V.region] = {z: V.z, px: V.px, py: V.py, fine: V.fine};
     try { localStorage.setItem('dikiz-view', JSON.stringify(V)); } catch (e) {}
   };
@@ -321,11 +332,12 @@
   let retryTimer = null;
   function connect() {
     clearTimeout(retryTimer);
+    if (V.audioOnly) return;           // yalnızca ses: görüntü çekme
     img.src = BASE + '/stream?t=' + Date.now();
   }
   img.addEventListener('load', () => { layout(); });
   img.addEventListener('error', () => {
-    if (frozen) return;
+    if (frozen || V.audioOnly) return;
     setStatus(false, 'Bağlantı koptu, yeniden deneniyor…');
     retryTimer = setTimeout(connect, 1500);
   });
@@ -573,6 +585,29 @@
   $('bTorchBar').onclick = act.torch;
   const camSwitch = () => { const t = $('bCamSwitch').dataset.target; if (t) { api({camera: t}); toast('Kamera değişiyor…'); } };
   $('bCamSwitch').onclick = camSwitch;
+
+  // ---------- kalite: yavaş internette düşür; "yalnızca ses" görüntüyü tamamen kapatır ----------
+  function setQuality(v, quiet) {
+    V.qual = v; save();
+    $('selQual').value = v;
+    if (v === 'audio') {
+      V.audioOnly = true; save();
+      img.removeAttribute('src');
+      document.body.classList.add('audio');
+      if (!listenOn) listenToggle();
+      if (!quiet) toast('Yalnızca ses: görüntü kapalı');
+      return;
+    }
+    const wasAudio = V.audioOnly;
+    V.audioOnly = false; save();
+    document.body.classList.remove('audio');
+    api({preset: v});                  // telefon boyutu, JPEG kalitesini ve kare hızını birlikte ayarlar
+    if (wasAudio) connect();
+    if (!quiet) toast(v + 'p');
+  }
+  $('selQual').addEventListener('change', e => setQuality(e.target.value));
+  if (V.audioOnly) { document.body.classList.add('audio'); $('selQual').value = 'audio'; }
+  else if (V.qual) $('selQual').value = V.qual;
   $('bFront').onclick = () => frontToggle();
   $('bVoice').onclick = () => voiceToggle();
   $('bListen').onclick = () => listenToggle();
@@ -862,6 +897,9 @@
   function applyState(s) {
     const prevRot = S.rotation;
     S = s;
+    // Kalite kutusu: kullanıcı seçmediyse telefonun şu anki çözünürlüğünü göster
+    // Kalite telefondan, Mac menüsünden ya da buradan değişebilir: kutu hep telefondakini gösterir
+    if (!V.audioOnly && s.preset && document.activeElement !== $('selQual')) $('selQual').value = String(s.preset);
     fillSelect($('selCam'), s.cameras.map(c => [c.id, c.label]), s.cameraId);
     fillSelect($('selSize'), s.sizes.map(z => {
       const [w, h] = z.split('x').map(Number), mp = (w * h / 1e6).toFixed(1);

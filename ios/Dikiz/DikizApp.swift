@@ -253,6 +253,20 @@ struct ContentView: View {
                         camera.set("torch", camera.ui.torch ? "0" : "1")
                     }
                 }
+                Menu {
+                    ForEach(CameraController.qualitySteps, id: \.self) { h in
+                        Button { camera.set("preset", String(h)) } label: {
+                            if h == camera.currentQuality() { Label("\(h)p", systemImage: "checkmark") } else { Text("\(h)p") }
+                        }
+                    }
+                } label: {
+                    VStack(spacing: 6) {
+                        Image(systemName: "dial.medium")
+                            .font(.system(size: 22)).foregroundStyle(.white)
+                            .frame(width: 58, height: 58).background(Glass, in: Circle())
+                        Text("\(camera.currentQuality())p").font(.system(size: 12)).foregroundStyle(.white)
+                    }
+                }
                 RoundAction(symbol: "moon.fill", label: "Karart") { setDim(true) }
             }
         }

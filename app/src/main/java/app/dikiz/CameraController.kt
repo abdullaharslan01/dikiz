@@ -145,7 +145,7 @@ class CameraController(
         val map = Camera2CameraInfo.from(info)
             .getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return emptyList()
         return (map.getOutputSizes(ImageFormat.YUV_420_888) ?: emptyArray())
-            .filter { it.width >= 320 && it.height >= 240 }
+            .filter { it.width >= 176 && it.height >= 144 }   // 144p'ye kadar: yavaş internet için
             .distinct()
             .sortedByDescending { it.width.toLong() * it.height }
     }
@@ -318,6 +318,14 @@ class CameraController(
                 control?.setExposureCompensationIndex(e)
                 state.update { it.copy(ev = e) }
             }
+            // Hazır kalite: 1080 / 720 / 480 / 360 / 240 / 144 → boyut + JPEG kalitesi + kare hızı birlikte
+            "preset" -> value.toIntOrNull()?.let { h ->
+                val (q, fps) = presetParams(h)
+                prefs.edit().putInt("preset", h).apply()
+                applySetting("quality", q.toString())
+                applySetting("fps", fps.toString())
+                pickSize(state.value.sizes, h)?.let { applySetting("size", it.toString()) }
+            }
             "quality" -> value.toIntOrNull()?.let { q ->
                 val qq = q.coerceIn(30, 100)
                 prefs.edit().putInt("quality", qq).apply()
@@ -444,6 +452,24 @@ class CameraController(
     }
 
     /** Arka ↔ ön kamera. */
+    private fun pickSize(sizes: List<Size>, h: Int): Size? {
+        // Kısa kenarı hedefe en yakın boyut (önce eşit/büyük olanlar)
+        val up = sizes.filter { minOf(it.width, it.height) >= h }.minByOrNull { minOf(it.width, it.height) }
+        val down = sizes.filter { minOf(it.width, it.height) < h }.maxByOrNull { minOf(it.width, it.height) }
+        if (up == null) return down
+        if (down == null) return up
+        return if (minOf(up.width, up.height) - h <= (h - minOf(down.width, down.height)) * 1.5) up else down
+    }
+
+    /** Şu anki kalite (kullanıcı seçmediyse çözünürlükten tahmin). */
+    fun currentPreset(): Int {
+        val saved = prefs.getInt("preset", 0)
+        if (saved > 0) return saved
+        val s = state.value
+        val m = minOf(s.width, s.height).takeIf { it > 0 } ?: 720
+        return PRESETS.minByOrNull { kotlin.math.abs(it - m) } ?: 720
+    }
+
     fun switchFacing() {
         val s = state.value
         val current = s.cameras.firstOrNull { it.id == s.cameraId }?.facing
@@ -482,6 +508,7 @@ class CameraController(
             put("ev", s.ev)
             put("evStep", s.evStep.toDouble())
             put("quality", s.quality)
+            put("preset", currentPreset())
             put("maxFps", s.maxFps)
             put("fps", s.fps.toDouble())
             put("phonePreview", s.phonePreview)
@@ -499,4 +526,16 @@ class CameraController(
     }
 
     companion object { private const val TAG = "Dikiz" }
+}
+
+val PRESETS = listOf(1080, 720, 480, 360, 240, 144)
+
+/** Kalite adımına göre JPEG kalitesi ve kare hızı (yavaş internette daha az veri). */
+fun presetParams(h: Int): Pair<Int, Int> = when {
+    h >= 1080 -> 85 to 30
+    h >= 720 -> 80 to 30
+    h >= 480 -> 70 to 25
+    h >= 360 -> 60 to 20
+    h >= 240 -> 50 to 15
+    else -> 40 to 10
 }

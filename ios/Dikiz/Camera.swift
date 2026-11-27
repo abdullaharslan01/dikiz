@@ -76,6 +76,7 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
 
     static let presets: [(String, AVCaptureSession.Preset)] = [
         ("1920x1080", .hd1920x1080), ("1280x720", .hd1280x720), ("640x480", .vga640x480),
+        ("352x288", .cif352x288),
     ]
 
     init(hub: FrameHub) {
@@ -345,6 +346,15 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
             let bias = Float(Double(ee) * s.evStep)
             lock.unlock()
             withDevice { $0.setExposureTargetBias(bias, completionHandler: nil) }
+        case "preset":
+            // Hazır kalite: 1080 / 720 / 480 / 360 / 240 / 144 → boyut + JPEG kalitesi + kare hızı
+            guard let h = Int(value) else { break }
+            prefs.set(h, forKey: "preset")
+            let (q, f) = Self.presetParams(h)
+            apply("quality", String(q))
+            apply("fps", String(f))
+            let size = h >= 1080 ? "1920x1080" : h >= 720 ? "1280x720" : h >= 480 ? "640x480" : h >= 288 ? "640x480" : "352x288"
+            apply("size", size)
         case "quality":
             guard let q = Int(value) else { break }
             let qq = min(max(q, 30), 100)
@@ -427,6 +437,27 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
         publishUI()
     }
 
+    static let qualitySteps = [1080, 720, 480, 360, 240, 144]
+
+    static func presetParams(_ h: Int) -> (Int, Int) {
+        switch h {
+        case 1080...: return (85, 30)
+        case 720...: return (80, 30)
+        case 480...: return (70, 25)
+        case 360...: return (60, 20)
+        case 240...: return (50, 15)
+        default: return (40, 10)
+        }
+    }
+
+    /// Şu anki kalite (kullanıcı seçmediyse çözünürlükten tahmin).
+    func currentQuality() -> Int {
+        if let p = prefs.object(forKey: "preset") as? Int { return p }
+        lock.lock(); let m = min(s.width, s.height); lock.unlock()
+        let mm = m > 0 ? m : 720
+        return Self.qualitySteps.min { abs($0 - mm) < abs($1 - mm) } ?? 720
+    }
+
     // MARK: - Durum
 
     private func publishUI() {
@@ -463,6 +494,7 @@ final class CameraController: NSObject, ObservableObject, AVCaptureVideoDataOutp
             "ev": x.ev,
             "evStep": x.evStep,
             "quality": x.quality,
+            "preset": currentQuality(),
             "maxFps": x.maxFps,
             "fps": x.fps,
             "phonePreview": x.phonePreview,

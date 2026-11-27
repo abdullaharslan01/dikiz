@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.FlashlightOn
+import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PanoramaWideAngle
@@ -39,6 +40,8 @@ import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -291,6 +294,19 @@ private fun DikizScreen(
             if (state.hasFlash) {
                 RoundAction(Icons.Rounded.FlashlightOn, "Fener", active = state.torch) {
                     camera.set("torch", if (state.torch) "0" else "1")
+                }
+            }
+            Box {
+                var open by remember { mutableStateOf(false) }
+                val preset = remember(state.width, state.height, state.quality) { camera.currentPreset() }
+                RoundAction(Icons.Rounded.HighQuality, "${preset}p") { open = true }
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    PRESETS.forEach { h ->
+                        DropdownMenuItem(
+                            text = { Text("${h}p" + if (h == preset) "  ✓" else "") },
+                            onClick = { camera.set("preset", h.toString()); open = false },
+                        )
+                    }
                 }
             }
             RoundAction(Icons.Rounded.Bedtime, "Karart") { dimmed = true }
