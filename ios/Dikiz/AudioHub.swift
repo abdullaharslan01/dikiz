@@ -46,14 +46,7 @@ final class AudioHub {
     }
 
     private func startEngine() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
-            try session.setPreferredSampleRate(48000)
-            try session.setActive(true)
-        } catch {
-            NSLog("Dikiz ses oturumu: %@", "\(error)")
-        }
+        AudioSessionUse.acquire()
         let e = AVAudioEngine()
         let input = e.inputNode
         let inFormat = input.outputFormat(forBus: 0)
@@ -77,7 +70,7 @@ final class AudioHub {
         engine = nil
         converter = nil
         pending.removeAll()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioSessionUse.release()
     }
 
     private func convertAndSend(_ buf: AVAudioPCMBuffer) {

@@ -221,6 +221,7 @@ final class Bridge {
 final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionRequestDelegate, NSMenuDelegate {
     let bridge = Bridge()
     let micPump = MicPump()
+    let speakerPump = SpeakerPump()
     var item: NSStatusItem!
     var openedOnce = false
     var warned = false
@@ -240,6 +241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
                 ";filter=\(d.string(forKey: "fxFilter") ?? "none")"
         }
         micPump.onState = { [weak self] in self?.refresh() }
+        speakerPump.onState = { [weak self] in self?.refresh() }
+        speakerPump.recoverAfterCrash()   // önceki oturumda çıkış Dikiz Hoparlör'de kaldıysa geri ver
         bridge.start()
         installCameraExtension()
         refresh()
@@ -364,12 +367,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         if current != "none" { filterItem.title = "Filtre: " + (filterMenu.items.first { ($0.representedObject as? String) == current }?.title ?? "") }
         menu.addItem(filterItem)
 
-        // ---- Ses: telefon mikrofonu → Dikiz Mikrofon (sanal mikrofon) ----
+        // ---- Ses: telefon mikrofonu → Dikiz Mikrofon; Mac sesi → Dikiz Hoparlör → telefon ----
         menu.addItem(.separator())
         menu.addItem(header("Ses"))
         let drv = MicDriver.status
         if drv != .ok {
-            let inst = action(drv == .missing ? "Dikiz Mikrofon'u kur…" : "Dikiz Mikrofon'u güncelle…",
+            let inst = action(drv == .missing ? "Dikiz ses sürücüsünü kur…" : "Dikiz ses sürücüsünü güncelle…",
                               symbol: "mic.badge.plus", #selector(installMicDriver), key: "")
             menu.addItem(inst)
         }
@@ -383,6 +386,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
             menu.addItem(st)
         }
         syncMic()
+
+        let spkItem = action("Bilgisayar sesini telefonda çal", symbol: "hifispeaker", #selector(toggleSpeaker), key: "", on: speakerOn)
+        menu.addItem(spkItem)
+        if speakerOn && drv == .ok {
+            let st = NSMenuItem(title: speakerPump.sending ? "● Mac sesi telefona gidiyor"
+                                    : (bridge.code == nil ? "○ Telefon bekleniyor" : "○ Telefona bağlanıyor…"),
+                                action: nil, keyEquivalent: "")
+            st.isEnabled = false
+            menu.addItem(st)
+        }
+        syncSpeaker()
 
         // ---- Telefon: lens ve ışık ----
         if bridge.code != nil {
@@ -492,17 +506,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         refresh()
     }
 
+    // ---- Mac sesi → telefon (kalıcı anahtar) ----
+    var speakerOn: Bool { get { defaults.bool(forKey: "speakerToPhone") } set { defaults.set(newValue, forKey: "speakerToPhone") } }
+    private var speakerAfterInstall = false
+
+    /// Açıksa ve telefon bağlıysa Mac'in çıkışını Dikiz Hoparlör'e al ve sesi telefona gönder;
+    /// kapanınca ya da telefon gidince önceki çıkışa geri dön.
+    func syncSpeaker() {
+        if speakerOn, MicDriver.status == .ok, MicDriver.hasSpeaker, let code = bridge.code {
+            speakerPump.start(code: code)
+        } else if speakerPump.isRunning {
+            speakerPump.stop()
+        }
+    }
+
+    @objc func toggleSpeaker() {
+        if !speakerOn && (MicDriver.status != .ok || !MicDriver.hasSpeaker) {
+            // Sürücü yok ya da eski (Hoparlör yok): önce kurulum
+            speakerAfterInstall = true
+            installMicDriver()
+            return
+        }
+        speakerOn.toggle()
+        refresh()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        speakerPump.stop()   // Mac'in sesini önceki çıkışa geri ver
+    }
+
     @objc func installMicDriver() {
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
-        a.messageText = "Dikiz Mikrofon'u kur"
-        a.informativeText = "Telefonunun mikrofonunu Zoom, Meet, Teams ve FaceTime'da “Dikiz Mikrofon” olarak seçebilmen için " +
-            "Mac'e küçük bir ses sürücüsü kurulur.\n\nKurulum için Mac'in yönetici parolası bir kez sorulur. " +
-            "Kurulum sırasında ses birkaç saniye kesilebilir."
+        a.messageText = "Dikiz ses sürücüsünü kur"
+        a.informativeText = "Mac'e küçük bir ses sürücüsü kurulur. İki şey sağlar:\n\n" +
+            "• Dikiz Mikrofon: telefonunun mikrofonu Zoom, Meet, Teams ve FaceTime'da mikrofon olarak seçilir.\n" +
+            "• Dikiz Hoparlör: Mac'in sesi telefonda çalar.\n\n" +
+            "Kurulum için Mac'in yönetici parolası bir kez sorulur. Kurulum sırasında ses birkaç saniye kesilebilir."
         a.addButton(withTitle: "Kur")
         a.addButton(withTitle: "Vazgeç")
-        guard a.runModal() == .alertFirstButtonReturn else { return }
+        guard a.runModal() == .alertFirstButtonReturn else { speakerAfterInstall = false; return }
         if let err = MicDriver.install() {
+            speakerAfterInstall = false
             if !err.isEmpty {
                 let e = NSAlert()
                 e.messageText = "Dikiz Mikrofon kurulamadı"
@@ -512,9 +557,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
             return
         }
         // Core Audio yeniden başlıyor; aygıt birkaç saniye içinde görünür.
-        if !micOn { micOn = true }
+        if speakerAfterInstall { speakerAfterInstall = false; speakerOn = true } else if !micOn { micOn = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             self?.micPump.restartEngine()
+            self?.speakerPump.restartEngine()
             self?.refresh()
         }
         refresh()

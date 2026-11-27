@@ -16,6 +16,7 @@ final class HttpServer {
     private let hub: FrameHub
     private let camera: CameraController
     private let audio: AudioHub
+    let speaker = SpeakerSink()
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private(set) var code: String
@@ -106,7 +107,7 @@ final class HttpServer {
             if let data { buf.append(data) }
             if let r = buf.range(of: Data("\r\n\r\n".utf8)) {
                 let head = String(decoding: buf[..<r.lowerBound], as: UTF8.self)
-                self.route(c, head: head)
+                self.route(c, head: head, body: Data(buf[r.upperBound...]))
             } else if done || err != nil || buf.count > 16 * 1024 {
                 c.cancel()
             } else {
@@ -120,7 +121,7 @@ final class HttpServer {
         return "?"
     }
 
-    private func route(_ c: NWConnection, head: String) {
+    private func route(_ c: NWConnection, head: String, body: Data = Data()) {
         let line = head.split(separator: "\r\n").first.map(String.init) ?? ""
         let parts = line.split(separator: " ")
         guard parts.count >= 2 else { c.cancel(); return }
@@ -150,6 +151,9 @@ final class HttpServer {
             stream(c)
         case "audio":
             audioStream(c)
+        case "speaker":
+            guard parts[0] == "POST" else { return send(c, 404, "text/plain", Data("yok".utf8)) }
+            speakerStream(c, first: body)
         case "snapshot.jpg":
             hub.nextFrame(timeout: 2.5, queue: q) { [weak self] f in
                 guard let self else { return }
@@ -300,6 +304,30 @@ final class HttpServer {
             default: break
             }
         }
+    }
+
+    // MARK: - Mac'in sesi → hoparlör (POST gövdesi: ham PCM s16le, stereo, 48 kHz)
+
+    private func speakerStream(_ c: NWConnection, first: Data) {
+        let g = speaker.begin()
+        var ended = false
+        let finish: () -> Void = { [weak self] in
+            guard !ended else { return }
+            ended = true
+            self?.speaker.end(g)
+            c.cancel()
+        }
+        c.send(content: Data("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n".utf8),
+               completion: .contentProcessed { _ in })
+        if !first.isEmpty { speaker.feed(g, first) }
+        func pump() {
+            c.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, done, err in
+                guard let self else { return }
+                if let data, !data.isEmpty { self.speaker.feed(g, data) }
+                if done || err != nil { self.q.async(execute: finish) } else { pump() }
+            }
+        }
+        pump()
     }
 
     // MARK: - Kod deneme sınırı

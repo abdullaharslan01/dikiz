@@ -4,15 +4,22 @@
 //         → köprü 127.0.0.1:47800 → MicPump (titreşim tamponu)
 //         → "Dikiz Mikrofon" aygıtının çıkışı → aygıtın girişi = toplantı uygulamasının mikrofonu.
 //
+// Dikiz Hoparlör — Mac'in sesini telefonda çalma (ters yön).
+//
+// Akış: Mac'in varsayılan çıkışı "Dikiz Hoparlör" → aygıtın girişi → SpeakerPump
+//         → POST /<kod>/speaker (ham PCM, 16 bit, 48 kHz, stereo) → köprü → telefon hoparlörü.
+//
 // Sürücü (DikizMikrofon.driver) uygulamanın içinde taşınır; /Library/Audio/Plug-Ins/HAL'a
 // yalnızca kullanıcı onay verip yönetici parolasını girince kopyalanır.
 
 import AVFoundation
 import Cocoa
 import CoreAudio
+import Network
 import os
 
 let MIC_DEVICE_UID = "DikizMikrofon_UID"
+let SPK_DEVICE_UID = "DikizHoparlor_UID"
 
 // ---- sürücü kurulumu ----
 enum MicDriver {
@@ -52,8 +59,14 @@ enum MicDriver {
     }
 
     /// Sistemdeki "Dikiz Mikrofon" aygıtının kimliği (yoksa nil).
-    static func deviceID() -> AudioDeviceID? {
-        var uid = MIC_DEVICE_UID as CFString
+    static func deviceID() -> AudioDeviceID? { deviceID(uid: MIC_DEVICE_UID) }
+
+    /// Kurulu sürücüde Dikiz Hoparlör de var mı (eski sürücüde yalnızca Mikrofon vardı).
+    static var hasSpeaker: Bool { deviceID(uid: SPK_DEVICE_UID) != nil }
+
+    /// UID'den Core Audio aygıt kimliği (yoksa nil).
+    static func deviceID(uid u: String) -> AudioDeviceID? {
+        var uid = u as CFString
         var dev = AudioDeviceID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
@@ -248,5 +261,268 @@ final class MicPump: NSObject, URLSessionDataDelegate {
         setReceiving(false)
         jitter.reset()
         DispatchQueue.main.async { self.scheduleRetry() }
+    }
+}
+
+
+// ---- varsayılan çıkış aygıtı (Mac sesi nereye gidiyor) ----
+enum DefaultOutput {
+    private static func address(_ sel: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: sel, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    }
+
+    static func get(system: Bool = false) -> AudioDeviceID? {
+        var addr = address(system ? kAudioHardwarePropertyDefaultSystemOutputDevice : kAudioHardwarePropertyDefaultOutputDevice)
+        var dev = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let r = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev)
+        return (r == noErr && dev != kAudioObjectUnknown) ? dev : nil
+    }
+
+    @discardableResult
+    static func set(_ dev: AudioDeviceID, system: Bool = false) -> Bool {
+        var addr = address(system ? kAudioHardwarePropertyDefaultSystemOutputDevice : kAudioHardwarePropertyDefaultOutputDevice)
+        var d = dev
+        return AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil,
+                                          UInt32(MemoryLayout<AudioDeviceID>.size), &d) == noErr
+    }
+
+    /// Aygıt kimliğinden UID (kimlikler Core Audio yeniden başlayınca değişir; UID değişmez).
+    static func uid(of dev: AudioDeviceID) -> String? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID, mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var s: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &s) == noErr, let v = s?.takeRetainedValue() else { return nil }
+        return v as String
+    }
+}
+
+// ---- Mac sesini telefona gönderen pompa ----
+final class SpeakerPump {
+    private(set) var code: String?
+    private(set) var sending = false
+    var onState: (() -> Void)?
+
+    private let q = DispatchQueue(label: "dikiz.speaker")
+    private var engine: AVAudioEngine?
+    private var converter: AVAudioConverter?
+    private let outFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 48_000, channels: 2, interleaved: true)!
+    private let sender = SpeakerSender()
+    private let defaults = UserDefaults.standard
+
+    var isRunning: Bool { code != nil }
+
+    init() {
+        sender.onState = { [weak self] ok in
+            guard let self, ok != self.sending else { return }
+            self.sending = ok
+            DispatchQueue.main.async { self.onState?() }
+        }
+    }
+
+    /// Önceki oturum çökmüş ve çıkış Dikiz Hoparlör'de kalmışsa eski çıkışı geri ver.
+    func recoverAfterCrash() {
+        guard defaults.string(forKey: "spkPrevOutput") != nil else { return }
+        restoreOutput()
+    }
+
+    func start(code c: String) {
+        if code == c { return }
+        let wasRunning = isRunning
+        code = c
+        if !wasRunning {
+            guard switchOutputToSpeaker() else { code = nil; return }
+            startEngine()
+        }
+        sender.start(path: "/\(c)/speaker")
+    }
+
+    /// Durdur ve Mac'in sesini önceki çıkışa geri ver.
+    func stop() {
+        guard isRunning else { return }
+        code = nil
+        sender.stop()
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop(); engine = nil
+        converter = nil
+        restoreOutput()
+    }
+
+    /// Core Audio yeniden başladığında (sürücü güncellemesi) aygıtı yeniden bağla.
+    func restartEngine() {
+        guard isRunning else { return }
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop(); engine = nil
+        _ = switchOutputToSpeaker()
+        startEngine()
+    }
+
+    // ---- varsayılan çıkışı değiştir / geri ver ----
+    private func switchOutputToSpeaker() -> Bool {
+        guard let spk = MicDriver.deviceID(uid: SPK_DEVICE_UID) else { NSLog("Dikiz: Dikiz Hoparlör aygıtı yok"); return false }
+        // Önceki çıkışları UID olarak sakla (çökmede bile geri verilebilsin); zaten Hoparlör'deyse üzerine yazma.
+        if let cur = DefaultOutput.get(), cur != spk, let u = DefaultOutput.uid(of: cur) { defaults.set(u, forKey: "spkPrevOutput") }
+        if let cur = DefaultOutput.get(system: true), cur != spk, let u = DefaultOutput.uid(of: cur) { defaults.set(u, forKey: "spkPrevSystemOutput") }
+        DefaultOutput.set(spk)
+        DefaultOutput.set(spk, system: true)
+        return true
+    }
+
+    private func restoreOutput() {
+        let spk = MicDriver.deviceID(uid: SPK_DEVICE_UID)
+        for (key, system) in [("spkPrevOutput", false), ("spkPrevSystemOutput", true)] {
+            // Kullanıcı bu arada başka bir çıkış seçtiyse ona dokunma; yalnızca hâlâ Hoparlör'deyse geri ver.
+            if let uid = defaults.string(forKey: key), let prev = MicDriver.deviceID(uid: uid),
+               spk == nil || DefaultOutput.get(system: system) == spk {
+                DefaultOutput.set(prev, system: system)
+            }
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    // ---- Dikiz Hoparlör girişinden yakala → s16le stereo 48 kHz ----
+    private func startEngine() {
+        guard let dev = MicDriver.deviceID(uid: SPK_DEVICE_UID) else { return }
+        let e = AVAudioEngine()
+        let input = e.inputNode
+        guard let au = input.audioUnit else { return }
+        var d = dev
+        let st = AudioUnitSetProperty(au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                      &d, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if st != noErr { NSLog("Dikiz: Hoparlör girişi seçilemedi %d", st); return }
+        let inFormat = input.outputFormat(forBus: 0)
+        guard inFormat.sampleRate > 0, let conv = AVAudioConverter(from: inFormat, to: outFormat) else { return }
+        converter = conv
+        let snd = sender
+        input.installTap(onBus: 0, bufferSize: 960, format: inFormat) { [weak self] buf, _ in
+            guard let self, let data = self.convert(buf) else { return }
+            snd.send(data)
+        }
+        do {
+            try e.start()
+            engine = e
+        } catch {
+            input.removeTap(onBus: 0)
+            NSLog("Dikiz: Hoparlör yakalama başlamadı: %@", "\(error)")
+        }
+    }
+
+    private func convert(_ buf: AVAudioPCMBuffer) -> Data? {
+        guard let conv = converter else { return nil }
+        let ratio = outFormat.sampleRate / buf.format.sampleRate
+        guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: AVAudioFrameCount(Double(buf.frameLength) * ratio + 64)) else { return nil }
+        var fed = false
+        var err: NSError?
+        conv.convert(to: out, error: &err) { _, status in
+            if fed { status.pointee = .noDataNow; return nil }
+            fed = true
+            status.pointee = .haveData
+            return buf
+        }
+        guard err == nil, out.frameLength > 0, let p = out.int16ChannelData?[0] else { return nil }
+        return Data(bytes: p, count: Int(out.frameLength) * 4)   // 2 kanal × 2 bayt
+    }
+}
+
+/// Köprü üzerinden telefona tek bir uzun POST: başlık + bitmeyen ham PCM gövdesi.
+/// Bağlantı koparsa 1,5 sn sonra yeniden bağlanır; ağ yavaşsa eski parçaları atar (gecikme birikmesin).
+final class SpeakerSender {
+    var onState: ((Bool) -> Void)?
+    var port: UInt16 = LOCAL_PORT
+    private let q = DispatchQueue(label: "dikiz.speaker.net")
+    private var conn: NWConnection?
+    private var path: String?
+    private var ready = false
+    private var inflight = 0
+    private var retry: DispatchWorkItem?
+    private(set) var sentBytes = 0
+
+    func start(path p: String) {
+        q.async {
+            if self.path == p, self.conn != nil { return }
+            self.path = p
+            self.reconnect(now: true)
+        }
+    }
+
+    func stop() {
+        q.async {
+            self.path = nil
+            self.retry?.cancel(); self.retry = nil
+            self.conn?.cancel(); self.conn = nil
+            self.setReady(false)
+        }
+    }
+
+    func send(_ data: Data) {
+        q.async {
+            guard let c = self.conn, self.ready else { return }
+            guard self.inflight < 15 else { return }   // ~150–300 ms birikti: bu parçayı at
+            self.inflight += 1
+            c.send(content: data, completion: .contentProcessed { [weak self] err in
+                self?.q.async {
+                    guard let self else { return }
+                    self.inflight -= 1
+                    if err == nil { self.sentBytes += data.count } else { self.reconnect(now: false) }
+                }
+            })
+        }
+    }
+
+    private func setReady(_ v: Bool) {
+        guard v != ready else { return }
+        ready = v
+        onState?(v)
+    }
+
+    private func reconnect(now: Bool) {
+        conn?.cancel(); conn = nil
+        setReady(false)
+        inflight = 0
+        retry?.cancel()
+        guard path != nil else { return }
+        if !now {
+            let w = DispatchWorkItem { [weak self] in self?.reconnect(now: true) }
+            retry = w
+            q.asyncAfter(deadline: .now() + 1.5, execute: w)
+            return
+        }
+        guard let p = path, let port = NWEndpoint.Port(rawValue: port) else { return }
+        let c = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+        conn = c
+        c.stateUpdateHandler = { [weak self, weak c] st in
+            guard let self, let c, c === self.conn else { return }
+            switch st {
+            case .ready:
+                let head = "POST \(p) HTTP/1.1\r\nHost: dikiz\r\n" +
+                    "Content-Type: audio/pcm; format=s16le; rate=48000; channels=2\r\nConnection: close\r\n\r\n"
+                c.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
+                self.readResponse(c)
+            case .failed, .cancelled:
+                if c === self.conn { self.reconnect(now: false) }
+            default: break
+            }
+        }
+        c.start(queue: q)
+    }
+
+    /// Telefonun yanıtı: 200 gelince ses gönderilmeye başlar; bağlantı kapanırsa yeniden bağlan.
+    private func readResponse(_ c: NWConnection) {
+        c.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, done, err in
+            guard let self, c === self.conn else { return }
+            if let data, !self.ready {
+                let head = String(decoding: data, as: UTF8.self)
+                if head.hasPrefix("HTTP/1.1 200") || head.hasPrefix("HTTP/1.0 200") {
+                    self.setReady(true)
+                } else {
+                    NSLog("Dikiz: telefon hoparlör isteğini kabul etmedi: %@", String(head.prefix(40)))
+                    self.reconnect(now: false)
+                    return
+                }
+            }
+            if done || err != nil { self.reconnect(now: false); return }
+            self.readResponse(c)   // telefon başka bir şey yazmaz; kapanışı yakalamak için dinle
+        }
     }
 }

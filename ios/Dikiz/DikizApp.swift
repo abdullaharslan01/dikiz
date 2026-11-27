@@ -40,6 +40,7 @@ final class AppModel: ObservableObject {
     @Published var addresses: [String] = Pairing.localAddresses()
     @Published var clients = 0
     @Published var listeners = 0
+    @Published var macSound = false
     private var started = false
     private var addrTimer: Timer?
 
@@ -48,6 +49,7 @@ final class AppModel: ObservableObject {
         server = HttpServer(hub: hub, camera: camera, audio: audio, code: Pairing.code())
         hub.onClientsChanged = { [weak self] n in self?.clients = n }
         audio.onListenersChanged = { [weak self] n in self?.listeners = n }
+        server.speaker.onPlayingChanged = { [weak self] on in self?.macSound = on }
     }
 
     func resume() {
@@ -185,12 +187,15 @@ struct ContentView: View {
     @ViewBuilder private var chip: some View {
         Button { showCode = true } label: {
             HStack(spacing: 10) {
-                if model.clients > 0 {
+                if model.clients > 0 || model.listeners > 0 || model.macSound {
                     Circle().fill(Live).frame(width: 8, height: 8)
                     Text("Mac'e bağlı").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                    if camera.ui.width > 0 {
+                    if camera.ui.width > 0 && model.clients > 0 {
                         Text("·  \(min(camera.ui.width, camera.ui.height))p · \(Int(camera.ui.fps.rounded())) fps")
                             .font(.system(size: 13)).foregroundStyle(Muted)
+                    }
+                    if model.macSound {
+                        Image(systemName: "speaker.wave.2.fill").font(.system(size: 13)).foregroundStyle(Accent)
                     }
                     if model.listeners > 0 {
                         Image(systemName: "mic.fill").font(.system(size: 13))
