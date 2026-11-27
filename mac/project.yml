@@ -8,8 +8,8 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.6"
-    CURRENT_PROJECT_VERSION: "7"
+    MARKETING_VERSION: "1.7"
+    CURRENT_PROJECT_VERSION: "8"
     ENABLE_HARDENED_RUNTIME: YES
 targets:
   Dikiz:
@@ -17,6 +17,8 @@ targets:
     platform: macOS
     sources:
       - path: Dikiz.swift
+      - path: Audio.swift
+      - path: Preview.swift
       - path: Resources/AppIcon.icns
         buildPhase: resources
     settings:
@@ -28,6 +30,12 @@ targets:
     dependencies:
       - target: DikizCamera
         embed: true
+      # Sanal mikrofon sürücüsü uygulamanın içinde taşınır; kurulumda /Library/Audio/Plug-Ins/HAL'a kopyalanır.
+      - target: DikizMikrofon
+        embed: true
+        codeSign: true
+        copy:
+          destination: resources
   DikizCamera:
     type: system-extension
     platform: macOS
@@ -41,3 +49,18 @@ targets:
         INFOPLIST_FILE: camera/Info.plist
         CODE_SIGN_ENTITLEMENTS: camera/DikizCamera.entitlements
         SKIP_INSTALL: YES
+  DikizMikrofon:
+    type: bundle
+    platform: macOS
+    sources:
+      - path: audio
+        excludes: ["*.plist"]
+    settings:
+      base:
+        PRODUCT_NAME: DikizMikrofon
+        PRODUCT_BUNDLE_IDENTIFIER: app.dikiz.mac.mikrofon
+        INFOPLIST_FILE: audio/Info.plist
+        WRAPPER_EXTENSION: driver
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        OTHER_LDFLAGS: ["-framework", "CoreAudio", "-framework", "CoreFoundation"]

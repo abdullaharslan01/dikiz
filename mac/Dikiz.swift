@@ -218,8 +218,9 @@ final class Bridge {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionRequestDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionRequestDelegate, NSMenuDelegate {
     let bridge = Bridge()
+    let micPump = MicPump()
     var item: NSStatusItem!
     var openedOnce = false
     var warned = false
@@ -238,6 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
                 ";blur=\(b("fxBlur"));beauty=\(b("fxBeauty"))" +
                 ";filter=\(d.string(forKey: "fxFilter") ?? "none")"
         }
+        micPump.onState = { [weak self] in self?.refresh() }
         bridge.start()
         installCameraExtension()
         refresh()
@@ -250,8 +252,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         return false
     }
 
+    // ---- Menüdeki canlı önizleme (küçük ayna) ----
+    private lazy var preview: PreviewView = {
+        let v = PreviewView(frame: NSRect(x: 0, y: 0, width: 300, height: 180))
+        v.onClick = { [weak self] in self?.openViewer() }
+        return v
+    }()
+    private lazy var previewItem: NSMenuItem = {
+        let it = NSMenuItem()
+        it.view = preview
+        return it
+    }()
+    private var menuOpen = false
+    private var refreshPending = false
+
+    func menuWillOpen(_ menu: NSMenu) {
+        menuOpen = true
+        if bridge.code != nil {
+            preview.mirror = vcamMirror        // toplantıda görünen yönle aynı
+            preview.extraRotation = vcamRot
+            preview.start()
+        } else {
+            preview.setWaiting(bridge.phones.isEmpty ? "Telefon aranıyor…" : "Telefonu eşleştir")
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuOpen = false
+        preview.stop()
+        if refreshPending { refreshPending = false; refresh() }
+    }
+
     func refresh() {
+        // Menü açıkken yeniden kurma: önizleme kaybolmasın; kapanınca güncellenir.
+        if menuOpen { refreshPending = true; return }
         let menu = NSMenu()
+        menu.delegate = self
+        previewItem.menu?.removeItem(previewItem)
+        menu.addItem(previewItem)
         let status: String
         if let e = bridge.listenError {
             status = "Hata: \(e)"
@@ -326,6 +364,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         if current != "none" { filterItem.title = "Filtre: " + (filterMenu.items.first { ($0.representedObject as? String) == current }?.title ?? "") }
         menu.addItem(filterItem)
 
+        // ---- Ses: telefon mikrofonu → Dikiz Mikrofon (sanal mikrofon) ----
+        menu.addItem(.separator())
+        menu.addItem(header("Ses"))
+        let drv = MicDriver.status
+        if drv != .ok {
+            let inst = action(drv == .missing ? "Dikiz Mikrofon'u kur…" : "Dikiz Mikrofon'u güncelle…",
+                              symbol: "mic.badge.plus", #selector(installMicDriver), key: "")
+            menu.addItem(inst)
+        }
+        let micItem = action("Telefon mikrofonunu Dikiz Mikrofon'a aktar", symbol: "mic", #selector(toggleMic), key: "", on: micOn)
+        micItem.isEnabled = drv != .missing
+        menu.addItem(micItem)
+        if micOn && drv != .missing {
+            let st = NSMenuItem(title: micPump.receiving ? "● Ses aktarılıyor" : (bridge.code == nil ? "○ Telefon bekleniyor" : "○ Ses bağlanıyor…"),
+                                action: nil, keyEquivalent: "")
+            st.isEnabled = false
+            menu.addItem(st)
+        }
+        syncMic()
+
         // ---- Telefon: lens ve ışık ----
         if bridge.code != nil {
             menu.addItem(.separator())
@@ -340,6 +398,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
             if phoneHasFlash {
                 menu.addItem(action("Işık", symbol: "lightbulb", #selector(toggleTorch), key: "", on: phoneTorch))
             }
+            // Kalite: yavaş ağda düşür (telefon boyut + JPEG kalitesi + kare hızını birlikte ayarlar)
+            let q = NSMenuItem(title: phonePreset > 0 ? "Kalite: \(phonePreset)p" : "Kalite", action: nil, keyEquivalent: "")
+            q.image = NSImage(systemSymbolName: "dial.medium", accessibilityDescription: nil)
+            let qm = NSMenu()
+            for h in [1080, 720, 480, 360, 240, 144] {
+                let it = NSMenuItem(title: "\(h)p", action: #selector(setPreset(_:)), keyEquivalent: "")
+                it.target = self
+                it.representedObject = h
+                it.state = h == phonePreset ? .on : .off
+                qm.addItem(it)
+            }
+            q.submenu = qm
+            menu.addItem(q)
         }
         menu.addItem(.separator())
         let login = NSMenuItem(title: "Mac açılınca başlat", action: #selector(toggleLogin), keyEquivalent: "")
@@ -403,11 +474,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         refresh()
     }
 
+    // ---- ses aktarımı (kalıcı) ----
+    var micOn: Bool { get { defaults.bool(forKey: "micToDevice") } set { defaults.set(newValue, forKey: "micToDevice") } }
+
+    /// Açıksa ve telefon bağlıysa telefonun mikrofonunu çek; değilse bırak (telefonda mikrofon kapanır).
+    func syncMic() {
+        if micOn, MicDriver.status != .missing, let code = bridge.code,
+           let u = URL(string: "http://127.0.0.1:\(LOCAL_PORT)/\(code)/audio") {
+            micPump.start(url: u)
+        } else if micPump.isRunning {
+            micPump.stop()
+        }
+    }
+
+    @objc func toggleMic() {
+        micOn.toggle()
+        refresh()
+    }
+
+    @objc func installMicDriver() {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "Dikiz Mikrofon'u kur"
+        a.informativeText = "Telefonunun mikrofonunu Zoom, Meet, Teams ve FaceTime'da “Dikiz Mikrofon” olarak seçebilmen için " +
+            "Mac'e küçük bir ses sürücüsü kurulur.\n\nKurulum için Mac'in yönetici parolası bir kez sorulur. " +
+            "Kurulum sırasında ses birkaç saniye kesilebilir."
+        a.addButton(withTitle: "Kur")
+        a.addButton(withTitle: "Vazgeç")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        if let err = MicDriver.install() {
+            if !err.isEmpty {
+                let e = NSAlert()
+                e.messageText = "Dikiz Mikrofon kurulamadı"
+                e.informativeText = err
+                e.runModal()
+            }
+            return
+        }
+        // Core Audio yeniden başlıyor; aygıt birkaç saniye içinde görünür.
+        if !micOn { micOn = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.micPump.restartEngine()
+            self?.refresh()
+        }
+        refresh()
+    }
+
     // ---- telefon durumu (lens / ışık) ----
     var phoneLensStops: [Double] = []
     var phoneZoom: Double = 1
     var phoneTorch = false
     var phoneHasFlash = false
+    var phonePreset = 0
 
     func pollPhone() {
         guard let code = bridge.code,
@@ -425,6 +543,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
                 let zoom = (j["zoom"] as? Double) ?? 1
                 let torch = (j["torch"] as? Bool) ?? false
                 let flash = (j["hasFlash"] as? Bool) ?? false
+                let preset = (j["preset"] as? Int) ?? 0
+                if preset != self.phonePreset { self.phonePreset = preset; self.refresh() }
                 if stops != self.phoneLensStops || abs(zoom - self.phoneZoom) > 0.01 || torch != self.phoneTorch || flash != self.phoneHasFlash {
                     self.phoneLensStops = stops; self.phoneZoom = zoom; self.phoneTorch = torch; self.phoneHasFlash = flash
                     self.refresh()
@@ -443,6 +563,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
 
     @objc func setLens(_ sender: NSMenuItem) {
         if let z = sender.representedObject as? Double { phoneSet("zoom=\(z)") }
+    }
+    @objc func setPreset(_ sender: NSMenuItem) {
+        if let h = sender.representedObject as? Int { phoneSet("preset=\(h)") }
     }
     @objc func toggleTorch() { phoneSet("torch=\(phoneTorch ? 0 : 1)") }
 
