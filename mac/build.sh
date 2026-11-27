@@ -1,5 +1,5 @@
 #!/bin/bash
-# Dikiz.app (+ Dikiz Kamera sanal kamera eklentisi) derler ve imzalar → dist/Dikiz.app
+# Dikiz.app (+ Dikiz Kamera sanal kamera eklentisi) derler, imzalar ve paketler → dist/Dikiz.dmg
 #
 # Gerekenler: Xcode, XcodeGen (brew install xcodegen) ve Xcode'da oturum açılmış,
 # sistem eklentisi imzalayabilen (ücretli) bir Apple geliştirici hesabı.
@@ -37,13 +37,21 @@ xcodebuild -project Dikiz.xcodeproj -scheme Dikiz -configuration Release \
   DEVELOPMENT_TEAM="$TEAM" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build -quiet
 
 mkdir -p "$OUT"
-rm -rf "$OUT/Dikiz.app"
-cp -R "$TMP/dd/Build/Products/Release/Dikiz.app" "$OUT/Dikiz.app"
-echo "✓ $OUT/Dikiz.app"
+rm -rf "$OUT/Dikiz.app" "$OUT/Dikiz.dmg" "$OUT/Dikiz-Kur.command"
+cp -R "$TMP/dd/Build/Products/Release/Dikiz.app" "$TMP/Dikiz.app"
 
-# Kurulum paketi: dist/ içinde Dikiz.app + Dikiz.apk + Dikiz-Kur.command
-cp Dikiz-Kur.command "$OUT/Dikiz-Kur.command"
-chmod +x "$OUT/Dikiz-Kur.command"
+# Sürükle-bırak kurulum: dist/Dikiz.dmg (Dikiz → Uygulamalar). Gevşek .app bırakmayız:
+# Mac'te birden fazla Dikiz kopyası görünmesin.
+# dmgbuild yoksa: python3 -m venv <yer> && <yer>/bin/pip install dmgbuild; DMGBUILD=<yer>/bin/dmgbuild
+DMGBUILD="${DMGBUILD:-$(command -v dmgbuild || true)}"
+swift make-dmg-bg.swift "$TMP/dmg-bg.png" >/dev/null
+if [ -n "$DMGBUILD" ]; then
+  "$DMGBUILD" -s dmg-settings.py -D app="$TMP/Dikiz.app" -D bg="$TMP/dmg-bg.png" "Dikiz" "$OUT/Dikiz.dmg" >/dev/null
+else
+  hdiutil create -volname Dikiz -srcfolder "$TMP/Dikiz.app" -ov -format UDZO "$OUT/Dikiz.dmg" >/dev/null
+fi
+echo "✓ $OUT/Dikiz.dmg"
+
 # Gradle derleme klasörü başka bir yere yönlendirilmişse DIKIZ_APK ile ver.
 APK="${DIKIZ_APK:-../app/build/outputs/apk/release/app-release.apk}"
 if [ -f "$APK" ]; then
