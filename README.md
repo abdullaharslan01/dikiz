@@ -1,80 +1,107 @@
-# 👁 Dikiz
+# Dikiz
 
-**Android telefonunu Mac'te kamera olarak kullan.**
+**Telefonunu bilgisayarında kamera, mikrofon ve hoparlör olarak kullan.** Android ve iPhone ile çalışır, aynı Wi‑Fi yeter. Kablo, hesap ya da bulut yok; görüntü ve ses evinin ağından çıkmaz.
 
-- **Uzaktan izle:** Telefonu istediğin yere koy, gördüğünü Mac ekranında canlı izle. Görüntü ters gelmez, sesle yönetebilirsin.
-- **Toplantıda web kamerası:** Meet, Zoom, Teams ve FaceTime'da **“Dikiz Kamera”** olarak seçilir.
+![Dikiz: Mac'te telefon görüntüsü ve telefon ekranı](docs/dikiz.jpg)
 
-Telefon ve Mac aynı Wi‑Fi'de olsun, yeter. Aynı ağda başka Dikiz kullananlar olsa da karışmaz: her Mac yalnızca kodla eşleştiği telefona bağlanır. Kablo, hesap ya da bulut yok; görüntü evinin ağından çıkmaz.
+## Neler yapabilirsin
+
+- **Telefon kamerasını Mac'te canlı izle.** Telefonu odanın bir köşesine koy, bilgisayardan izle. Bebek, evcil hayvan, kapı ya da masa üstü için.
+- **Toplantıda web kamerası olarak kullan.** Zoom, Google Meet, Microsoft Teams ve FaceTime'da **Dikiz Kamera** olarak seçilir. Mac'in kamerası yoksa ya da kapağı kapalıysa işe yarar.
+- **Telefonu mikrofon yap.** Telefonun sesini izleme ekranında dinle ya da toplantıda **Dikiz Mikrofon** olarak seç.
+- **Bilgisayarın sesini telefondan çal.** Mac'in sesi telefon hoparlöründen çıkar.
+- **Telefonun tüm kameraları:** 0.5× geniş açı, 1×, 2×, 3×; ön ve arka kamera, fener, odak.
+- **İnternet yavaşsa kaliteyi düşür:** 1080p'den 144p'ye kadar. İstersen yalnızca ses.
+- **Toplantı efektleri:** arka plan bulanıklığı, güzelleştirme ve filtreler. Hepsi cihazda, internete bir şey gitmez.
+- **Güvenli eşleşme:** telefonda 6 haneli bir kod çıkar. Kodu bilmeyen kameranı açamaz; aynı ağda başka telefonlar olsa da karışmaz.
 
 ## Kurulum
 
-**1. Telefon (Android 8+)**
-[Releases](../../releases/latest) sayfasından `Dikiz.apk` dosyasını indir ve telefona kur.
+### 1. Telefon
 
-**2. Mac (macOS 13+), isteğe bağlı**
-Sadece görüntüyü izlemek istiyorsan Mac'e bir şey kurmana gerek yok: telefonda yazan adresi tarayıcıda aç.
-Sesli komut, ön ayna ve toplantı kamerası için `Dikiz.dmg` dosyasını aç ve Dikiz'i **Uygulamalar** klasörüne sürükle.
+- **Android 8+:** [Releases](../../releases/latest) sayfasından `Dikiz.apk` dosyasını indir ve kur.
+- **iPhone (iOS 17+):** TestFlight ile davetle dağıtılıyor. Kendin derlemek için aşağıdaki adımlara bak.
+
+Uygulamayı aç; ekranın üstünde 6 haneli **eşleşme kodu** görünür.
+
+### 2. Bilgisayar
+
+**Hiçbir şey kurmadan:** telefonda yazan adresi (ör. `http://192.168.1.23:8080/482913`) aynı ağdaki herhangi bir bilgisayarın tarayıcısında aç. Windows, Linux ve Mac'te çalışır: canlı görüntü, dinleme, lens ve kalite seçimi, fotoğraf.
+
+**Mac uygulaması (macOS 13+):** toplantı kamerası, toplantı mikrofonu, bilgisayar sesini telefona gönderme ve menü çubuğunda canlı önizleme için. `Dikiz.dmg` dosyasını aç, Dikiz'i **Uygulamalar** klasörüne sürükle, aç ve telefondaki kodu gir. Bir kez girmen yeter.
+
+> Mac uygulaması bir sanal kamera ve ses sürücüsü içerdiği için Apple onaylı bir geliştirici imzası gerektirir. Hazır DMG şimdilik davetle paylaşılıyor; aşağıdaki adımlarla kendi Apple geliştirici hesabınla derleyebilirsin.
 
 ## Kullanım
 
-1. Telefonda **Dikiz**'i aç. Ekranın üstünde 6 haneli **eşleşme kodu** yazar.
-2. Mac'te **Dikiz**'i aç. Menü çubuğunda 👁 belirir ve telefonu kodla eşleştirmeni ister. Kodu bir kez girmen yeter, Mac bundan sonra yalnızca o telefona bağlanır.
-3. İlk seferde iki soru gelir: *görüntü düz mü?* ve *sağ elin hangi tarafta?* Bundan sonra sağ hep sağdır.
-4. Toplantıda kamera olarak **Dikiz Kamera**'yı seç. Ters ya da yan görünürse 👁 menüsünden düzelt.
+1. Telefonda **Dikiz**'i aç.
+2. Mac'te **Dikiz**'i aç; menü çubuğunda göz simgesi belirir ve telefondaki kodu sorar.
+3. Göz simgesine bas: menünün üstünde küçük canlı önizleme var; tıklayınca büyük pencere açılır.
+4. Toplantıda kamera olarak **Dikiz Kamera**'yı, mikrofon olarak **Dikiz Mikrofon**'u seç. Ses sürücüsü ilk kullanımda menüden bir kez kurulur (Mac şifresi ister).
 
-## Neler var
+| Ekran | |
+|---|---|
+| ![Mac'te izleme ekranı](docs/mac-izleme.webp) | ![Telefonda eşleşme kodu](docs/telefon-kod.webp) |
 
-- 🧭 **Yön ayarı:** iki soruda doğru yön
-- 🎤 **Sesli komut:** *dondur, devam, yakınlaş, uzaklaş, sol, sağ, ışık, fotoğraf…*
-- 💻 **Ön ayna:** Mac kamerası yanda ayna gibi açılır, arka ve ön aynı anda görünür
-- 📐 **Çizgiler ve simetri:** düz bir hat ve iki tarafı karşılaştırmak için
-- 🔭 **Lens seçimi:** geniş, ana ve tele lensler tek tuşla
-- 🎯 **Odak ve ışık:** tıkla-odakla, pozlama kilidi, telefon feneri, 60 fps
-- 📹 **Dikiz Kamera:** macOS sanal kamerası, menüden ayna / çevir / döndür
-- ✨ **Toplantı efektleri:** arka plan bulanıklığı, yüze özel güzelleştirme ve filtreler. Hepsi cihaz üzerinde, Apple Vision ve CoreImage ile.
-- 🔒 **Telefon kilitlense de** yayın sürer
-- 🔑 **Eşleşme kodu:** aynı ağdaki başkası kodu bilmeden kamerayı açamaz. Kod telefonda kalıcıdır; telefondaki koda dokunup **Kodu değiştir** dersen bağlı Mac'ler yeni kodu ister. Arka arkaya yanlış kod deneyen adres bir dakika bekletilir.
-
-### Kısayollar
+### Kısayollar (izleme ekranı)
 
 | Tuş | İşlev | Tuş | İşlev |
 |---|---|---|---|
-| `V` | Sesli komut | `Boşluk` | Dondur |
-| `W` | Ön ayna | `S` | Fotoğraf kaydet |
-| `M` | Ayna | `L` | Çizgiler |
-| `R` | Döndür | `Y` | Simetri |
-| `1` `2` `3` | Arka / sol / sağ görünüm | `T` | Işık |
+| `C` | Ön / arka kamera | `D` | Telefonu dinle |
+| `Boşluk` | Dondur | `S` | Fotoğraf kaydet |
+| `M` | Ayna | `R` | Döndür |
+| `T` | Işık | `F` | Tam ekran |
 | Tekerlek | Yakınlaştır | Tıkla | Odakla |
+
+Çizgiler, simetri, ön ayna, sesli komut ve görünümler **Daha** menüsünde.
+
+## Sık sorulanlar
+
+**Telefonumu Mac'te web kamerası olarak nasıl kullanırım?**
+Telefona Dikiz'i, Mac'e Dikiz uygulamasını kur, telefondaki kodu Mac'e gir. Zoom, Meet ya da Teams'te kamera olarak **Dikiz Kamera**'yı seç.
+
+**İnternet gerekiyor mu?**
+Hayır. Telefon ve bilgisayar aynı Wi‑Fi ağında olsun yeter; görüntü ve ses ağın dışına çıkmaz.
+
+**Windows'ta çalışır mı?**
+İzleme ekranı her tarayıcıda çalışır. Toplantı kamerası ve mikrofonu şimdilik yalnızca Mac'te.
+
+**Telefon kilitlenince yayın durur mu?**
+Android'de sürer. iPhone'da uygulama açık kalmalı; ekranı **Karart** ile kapatabilirsin.
 
 ## Kendin derle
 
-**Android**, gerekenler: JDK 17+ ve Android SDK (Android Studio ile gelir)
+**Android:** JDK 17+ ve Android SDK.
 
 ```bash
 ./gradlew assembleRelease
-# → app/build/outputs/apk/release/app-release.apk
 ```
 
-**Mac**, gerekenler: Xcode, [XcodeGen](https://github.com/yonaskolb/XcodeGen) ve Xcode'da oturum açılmış **ücretli** bir Apple geliştirici hesabı (sanal kamera bir sistem eklentisi olduğu için).
+**Mac:** Xcode, [XcodeGen](https://github.com/yonaskolb/XcodeGen) ve sistem eklentisi imzalayabilen ücretli bir Apple geliştirici hesabı.
 
 ```bash
 brew install xcodegen
-DIKIZ_TEAM=<Apple ekip kimliğin> ./mac/build.sh
-# → dist/Dikiz.dmg  (aç, Dikiz'i Uygulamalar'a sürükle)
+DIKIZ_TEAM=<Apple ekip kimliğin> ./mac/build.sh        # Developer ID + Apple onayı → dist/Dikiz.dmg
+DIKIZ_TEAM=<Apple ekip kimliğin> DIKIZ_DEV=1 ./mac/build.sh   # yalnızca kendi Mac'in için hızlı derleme
 ```
 
-İlk açılışta **Sistem Ayarları → Genel → Giriş Öğeleri ve Uzantılar → Kamera Uzantıları** altında Dikiz'e izin ver.
+**iPhone:** Xcode ve XcodeGen.
+
+```bash
+cd ios && xcodegen generate && open Dikiz.xcodeproj
+```
 
 ## Nasıl çalışır
 
-Telefon görüntüyü Wi‑Fi'de MJPEG olarak yayınlar ve kendini Bonjour ile duyurur (ilanda yalnızca telefonun kimliği ve adı var, kod yok). Mac uygulaması eşleştiği telefonu bulur, görüntüyü `127.0.0.1` üzerinden tarayıcıya ve sanal kameraya verir. Tarayıcı ancak bu sayede mikrofonu ve Mac kamerasını kullanabiliyor.
+Telefon görüntüyü Wi‑Fi'de MJPEG, sesi ham PCM olarak yayınlar ve kendini Bonjour ile duyurur. İlanda yalnızca rastgele bir kimlik var; telefonun adı ve tüm görüntü, ses yolları eşleşme koduyla korunur. Mac uygulaması eşleştiği telefonu bulur ve `127.0.0.1` üzerinden tarayıcıya, sanal kameraya ve ses sürücüsüne aktarır.
 
 ```
-app/                  Android uygulaması (Kotlin, CameraX, Compose)
-app/src/main/assets/  izleme arayüzü (tek HTML dosyası)
-mac/                  menü çubuğu uygulaması (Swift)
-mac/camera/           Dikiz Kamera, CoreMediaIO sanal kamera eklentisi
+app/        Android uygulaması (Kotlin, CameraX, Jetpack Compose)
+ios/        iPhone uygulaması (SwiftUI, AVFoundation)
+mac/        menü çubuğu uygulaması (Swift)
+mac/camera  Dikiz Kamera: CoreMediaIO sanal kamera eklentisi
+mac/audio   Dikiz Mikrofon ve Dikiz Hoparlör: Core Audio sürücüsü
+app/src/main/assets/index.html  izleme ekranı (tek HTML dosyası)
 ```
 
 ## Teşekkürler
