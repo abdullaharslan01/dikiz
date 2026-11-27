@@ -5,7 +5,7 @@
 - **Uzaktan izle:** Telefonu istediğin yere koy, gördüğünü Mac ekranında canlı izle. Görüntü ters gelmez, sesle yönetebilirsin.
 - **Toplantıda web kamerası:** Meet, Zoom, Teams ve FaceTime'da **“Dikiz Kamera”** olarak seçilir.
 
-Telefon ve Mac aynı Wi‑Fi'de olsun, yeter. Kablo, hesap ya da bulut yok; görüntü evinin ağından çıkmaz.
+Telefon ve Mac aynı Wi‑Fi'de olsun, yeter. Aynı ağda başka Dikiz kullananlar olsa da karışmaz: her Mac yalnızca kodla eşleştiği telefona bağlanır. Kablo, hesap ya da bulut yok; görüntü evinin ağından çıkmaz.
 
 ## Kurulum
 
@@ -14,12 +14,12 @@ Telefon ve Mac aynı Wi‑Fi'de olsun, yeter. Kablo, hesap ya da bulut yok; gör
 
 **2. Mac (macOS 13+), isteğe bağlı**
 Sadece görüntüyü izlemek istiyorsan Mac'e bir şey kurmana gerek yok: telefonda yazan adresi tarayıcıda aç.
-Sesli komut, ön ayna ve toplantı kamerası için Mac uygulamasını derle (aşağıda).
+Sesli komut, ön ayna ve toplantı kamerası için `Dikiz.dmg` dosyasını aç ve Dikiz'i **Uygulamalar** klasörüne sürükle.
 
 ## Kullanım
 
-1. Telefonda **Dikiz**'i aç.
-2. Mac'te **Dikiz**'i aç. Menü çubuğunda 👁 belirir ve görüntü açılır.
+1. Telefonda **Dikiz**'i aç. Ekranın üstünde 6 haneli **eşleşme kodu** yazar.
+2. Mac'te **Dikiz**'i aç. Menü çubuğunda 👁 belirir ve telefonu kodla eşleştirmeni ister. Kodu bir kez girmen yeter, Mac bundan sonra yalnızca o telefona bağlanır.
 3. İlk seferde iki soru gelir: *görüntü düz mü?* ve *sağ elin hangi tarafta?* Bundan sonra sağ hep sağdır.
 4. Toplantıda kamera olarak **Dikiz Kamera**'yı seç. Ters ya da yan görünürse 👁 menüsünden düzelt.
 
@@ -34,6 +34,7 @@ Sesli komut, ön ayna ve toplantı kamerası için Mac uygulamasını derle (aş
 - 📹 **Dikiz Kamera:** macOS sanal kamerası, menüden ayna / çevir / döndür
 - ✨ **Toplantı efektleri:** arka plan bulanıklığı, yüze özel güzelleştirme ve filtreler. Hepsi cihaz üzerinde, Apple Vision ve CoreImage ile.
 - 🔒 **Telefon kilitlense de** yayın sürer
+- 🔑 **Eşleşme kodu:** aynı ağdaki başkası kodu bilmeden kamerayı açamaz. Kod telefonda kalıcıdır; telefondaki koda dokunup **Kodu değiştir** dersen bağlı Mac'ler yeni kodu ister. Arka arkaya yanlış kod deneyen adres bir dakika bekletilir.
 
 ### Kısayollar
 
@@ -60,14 +61,14 @@ Sesli komut, ön ayna ve toplantı kamerası için Mac uygulamasını derle (aş
 ```bash
 brew install xcodegen
 DIKIZ_TEAM=<Apple ekip kimliğin> ./mac/build.sh
-# → dist/Dikiz.app  (Uygulamalar klasörüne taşı ve aç)
+# → dist/Dikiz.dmg  (aç, Dikiz'i Uygulamalar'a sürükle)
 ```
 
 İlk açılışta **Sistem Ayarları → Genel → Giriş Öğeleri ve Uzantılar → Kamera Uzantıları** altında Dikiz'e izin ver.
 
 ## Nasıl çalışır
 
-Telefon görüntüyü Wi‑Fi'de MJPEG olarak yayınlar ve kendini Bonjour ile duyurur. Mac uygulaması telefonu bulur, görüntüyü `127.0.0.1` üzerinden tarayıcıya ve sanal kameraya verir. Tarayıcı ancak bu sayede mikrofonu ve Mac kamerasını kullanabiliyor.
+Telefon görüntüyü Wi‑Fi'de MJPEG olarak yayınlar ve kendini Bonjour ile duyurur (ilanda yalnızca telefonun kimliği ve adı var, kod yok). Mac uygulaması eşleştiği telefonu bulur, görüntüyü `127.0.0.1` üzerinden tarayıcıya ve sanal kameraya verir. Tarayıcı ancak bu sayede mikrofonu ve Mac kamerasını kullanabiliyor.
 
 ```
 app/                  Android uygulaması (Kotlin, CameraX, Compose)
