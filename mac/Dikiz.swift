@@ -19,9 +19,21 @@ final class Bridge {
     private var listener: NWListener?
     private var browser: NWBrowser?
 
+    /// Aynı ağda bulunan Dikiz telefonları (birden fazla kişi aynı Wi‑Fi'de olabilir).
+    struct Phone { let id: String; let name: String; let endpoint: NWEndpoint }
+    private(set) var phones: [Phone] = []
+
+    // Eşleşilen telefon: kimliği ve kodu kalıcı; Mac yalnızca bu telefona bağlanır.
+    private let defaults = UserDefaults.standard
+    var pairedId: String? { defaults.string(forKey: "pairedId") }
+    var pairedName: String? { defaults.string(forKey: "pairedName") }
+    private var pairedCode: String? { defaults.string(forKey: "pairedCode") }
+
     private(set) var target: NWEndpoint?
     private(set) var code: String?
     private(set) var model: String?
+    /// Telefonda kod değiştirilmiş: eski kod artık geçmiyor.
+    private(set) var codeRejected = false
     var onChange: (() -> Void)?
     var listenError: String?
     /// Sanal kameranın yön ayarı ("mirror=1;flip=0;rot=90"); menüden değişir, eklenti okur.
@@ -94,22 +106,87 @@ final class Bridge {
         let b = NWBrowser(for: .bonjourWithTXTRecord(type: "_dikiz._tcp", domain: nil), using: NWParameters())
         b.browseResultsChangedHandler = { [weak self] results, _ in
             guard let self else { return }
-            if let r = results.first {
-                self.target = r.endpoint
+            self.phones = results.map { r in
+                var id = "", name = "", model = ""
                 if case let .bonjour(txt) = r.metadata {
-                    self.code = txt["code"]
-                    self.model = txt["model"]
+                    id = txt["id"] ?? ""; name = txt["name"] ?? ""; model = txt["model"] ?? ""
                 }
-            } else {
-                self.target = nil
-            }
-            self.notify()
+                if case let .service(svc, _, _, _) = r.endpoint, id.isEmpty { id = "svc:" + svc }  // eski sürüm telefon
+                return Phone(id: id, name: name.isEmpty ? (model.isEmpty ? "Android telefon" : model) : name, endpoint: r.endpoint)
+            }.sorted { $0.name < $1.name }
+            self.recompute()
         }
         b.start(queue: q)
         browser = b
     }
 
     private func notify() { DispatchQueue.main.async { self.onChange?() } }
+
+    /// Eşleşilen telefon ağdaysa ona bağlan; başka telefonlara asla bağlanma.
+    private func recompute() {
+        if let id = pairedId, let p = phones.first(where: { $0.id == id }), let c = pairedCode, !codeRejected {
+            target = p.endpoint; code = c; model = p.name
+            if p.name != pairedName { defaults.set(p.name, forKey: "pairedName") }
+        } else {
+            target = nil; code = nil; model = nil
+        }
+        notify()
+    }
+
+    func pair(_ phone: Phone, code c: String) {
+        q.async {
+            self.defaults.set(phone.id, forKey: "pairedId")
+            self.defaults.set(phone.name, forKey: "pairedName")
+            self.defaults.set(c, forKey: "pairedCode")
+            self.codeRejected = false
+            self.recompute()
+        }
+    }
+
+    func unpair() {
+        q.async {
+            ["pairedId", "pairedName", "pairedCode"].forEach { self.defaults.removeObject(forKey: $0) }
+            self.codeRejected = false
+            self.recompute()
+        }
+    }
+
+    /// Telefon kodu kabul etmedi (telefonda kod değiştirilmiş) → bağlantıyı bırak, yeniden kod iste.
+    func markCodeRejected() {
+        q.async {
+            guard self.code != nil else { return }
+            self.codeRejected = true
+            self.recompute()
+        }
+    }
+
+    /// Kodu doğrudan telefona sorar: GET /<kod>/api/state → 200 ise doğru.
+    func verify(_ phone: Phone, code c: String, done: @escaping (Bool) -> Void) {
+        let conn = NWConnection(to: phone.endpoint, using: .tcp)
+        var finished = false
+        let finish: (Bool) -> Void = { ok in
+            guard !finished else { return }
+            finished = true
+            conn.cancel()
+            done(ok)
+        }
+        conn.stateUpdateHandler = { st in
+            switch st {
+            case .ready:
+                let req = "GET /\(c)/api/state HTTP/1.1\r\nHost: dikiz\r\nConnection: close\r\n\r\n"
+                conn.send(content: req.data(using: .utf8), completion: .contentProcessed { _ in })
+                conn.receive(minimumIncompleteLength: 12, maximumLength: 256) { data, _, _, _ in
+                    let head = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    finish(head.hasPrefix("HTTP/1.1 200"))
+                }
+            case .failed, .cancelled:
+                finish(false)
+            default: break
+            }
+        }
+        conn.start(queue: q)
+        q.asyncAfter(deadline: .now() + 6) { finish(false) }
+    }
 
     // Tarayıcıdan gelen her TCP bağlantısını telefona aktar (bayt bayt, iki yönlü).
     private func handle(_ inbound: NWConnection) {
@@ -153,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
     func applicationDidFinishLaunching(_ notification: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "Dikiz")
-        bridge.onChange = { [weak self] in self?.refresh(); self?.pollPhone() }
+        bridge.onChange = { [weak self] in self?.refresh(); self?.pollPhone(); self?.maybeAskPairing() }
         bridge.vcamConfig = {
             let d = UserDefaults.standard
             func b(_ k: String) -> Int { d.bool(forKey: k) ? 1 : 0 }
@@ -180,8 +257,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
             status = "Hata: \(e)"
         } else if bridge.code != nil {
             status = "● \(bridge.model ?? "Telefon") bağlı"
-        } else {
+        } else if bridge.codeRejected {
+            status = "⚠︎ \(bridge.pairedName ?? "Telefon"): kod değişmiş"
+        } else if let name = bridge.pairedName {
+            status = "○ \(name) aranıyor…"
+        } else if bridge.phones.isEmpty {
             status = "○ Telefon aranıyor…"
+        } else {
+            status = "○ Telefon eşleştirilmedi"
         }
         let s = NSMenuItem(title: status, action: nil, keyEquivalent: "")
         s.isEnabled = false
@@ -191,6 +274,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         open.target = self
         open.isEnabled = bridge.code != nil
         menu.addItem(open)
+        let pairTitle = bridge.codeRejected ? "Yeni kodu gir…" : (bridge.pairedId == nil ? "Telefonu eşleştir…" : "Telefonu değiştir…")
+        let pairItem = NSMenuItem(title: pairTitle, action: #selector(pairAction), keyEquivalent: "p")
+        pairItem.target = self
+        pairItem.isEnabled = !bridge.phones.isEmpty
+        menu.addItem(pairItem)
+        if bridge.pairedId != nil {
+            let un = NSMenuItem(title: "Eşleşmeyi kaldır", action: #selector(unpairAction), keyEquivalent: "")
+            un.target = self
+            menu.addItem(un)
+        }
         let again = NSMenuItem(title: "Telefonu yeniden ara", action: #selector(rescan), keyEquivalent: "r")
         again.target = self
         menu.addItem(again)
@@ -319,7 +412,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
     func pollPhone() {
         guard let code = bridge.code,
               let u = URL(string: "http://127.0.0.1:\(LOCAL_PORT)/\(code)/api/state") else { return }
-        URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
+        URLSession.shared.dataTask(with: u) { [weak self] data, resp, _ in
+            // 404: telefonda kod değiştirilmiş → eski kodla denemeyi bırak, yeni kodu sor.
+            if (resp as? HTTPURLResponse)?.statusCode == 404 {
+                self?.bridge.markCodeRejected()
+                return
+            }
             guard let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -406,9 +504,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
 
     @objc func openViewerAction() { openViewer() }
     @objc func rescan() { bridge.restartBrowse() }
+    @objc func pairAction() { askPairing(preferred: bridge.pairedId) }
+    @objc func unpairAction() { bridge.unpair() }
+
+    // ---- Eşleşme: telefonda görünen 6 haneli kodu bir kez gir ----
+    var pairingOpen = false
+    var autoAskedState = ""
+
+    /// Kendiliğinden yalnızca bir kez sorar: hiç eşleşme yokken telefon görününce
+    /// ya da eşleşilen telefonun kodu değişince. Başkasının telefonu için araya girmez.
+    func maybeAskPairing() {
+        guard !pairingOpen, bridge.code == nil, !bridge.phones.isEmpty else { return }
+        let rejectedHere = bridge.codeRejected && bridge.phones.contains { $0.id == bridge.pairedId }
+        guard bridge.pairedId == nil || rejectedHere else { return }
+        let state = "\(bridge.pairedId ?? "-")/\(bridge.codeRejected)"
+        guard state != autoAskedState else { return }
+        autoAskedState = state
+        DispatchQueue.main.async { self.askPairing(preferred: self.bridge.pairedId) }
+    }
+
+    func askPairing(preferred: String?, error: String? = nil, picked: String? = nil) {
+        let phones = bridge.phones
+        guard !phones.isEmpty, !pairingOpen else { if phones.isEmpty { warnNotFound() }; return }
+        pairingOpen = true
+        defer { pairingOpen = false }
+        NSApp.activate(ignoringOtherApps: true)
+
+        let a = NSAlert()
+        a.messageText = error ?? (bridge.codeRejected ? "Telefondaki kod değişmiş" : "Telefonu eşleştir")
+        a.informativeText = "Telefonda Dikiz'i aç; ekranın üstünde yazan 6 haneli kodu gir.\n" +
+            "Bir kez girmen yeter: Mac bundan sonra yalnızca bu telefona bağlanır."
+        if error != nil { a.alertStyle = .warning }
+
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 34, width: 260, height: 26), pullsDown: false)
+        for p in phones { popup.addItem(withTitle: p.name); popup.lastItem?.representedObject = p.id }
+        if let sel = picked ?? preferred, let i = phones.firstIndex(where: { $0.id == sel }) { popup.selectItem(at: i) }
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
+        field.placeholderString = "Kod (ör. 482 913)"
+        field.font = .monospacedSystemFont(ofSize: 16, weight: .semibold)
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 62))
+        box.addSubview(popup)
+        box.addSubview(field)
+        a.accessoryView = box
+        a.addButton(withTitle: "Eşleştir")
+        a.addButton(withTitle: "Vazgeç")
+        a.window.initialFirstResponder = field
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+
+        let phone = phones[max(0, popup.indexOfSelectedItem)]
+        let code = field.stringValue.lowercased().filter { $0.isLetter || $0.isNumber }
+        guard !code.isEmpty else {
+            pairingOpen = false
+            return askPairing(preferred: preferred, error: "Kodu yazmadın", picked: phone.id)
+        }
+        let sem = DispatchSemaphore(value: 0)
+        var ok = false
+        bridge.verify(phone, code: code) { r in ok = r; sem.signal() }
+        _ = sem.wait(timeout: .now() + 7)
+        pairingOpen = false
+        if ok {
+            bridge.pair(phone, code: code)
+            openedOnce = false   // eşleşince görüntüyü aç
+        } else {
+            askPairing(preferred: preferred, error: "Kod tutmadı, telefondaki kodu kontrol et", picked: phone.id)
+        }
+    }
 
     func openViewer() {
-        guard let code = bridge.code else { warnNotFound(); return }
+        guard let code = bridge.code else {
+            if bridge.phones.isEmpty { warnNotFound() } else { askPairing(preferred: bridge.pairedId) }
+            return
+        }
         openedOnce = true
         let url = "http://127.0.0.1:\(LOCAL_PORT)/\(code)/"
         let chrome = "/Applications/Google Chrome.app"
@@ -427,7 +593,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
         a.messageText = "Telefon bulunamadı"
-        a.informativeText = "Telefonda Dikiz uygulamasını aç ve telefonun Mac ile aynı Wi‑Fi'de olduğundan emin ol.\n\nDikiz menü çubuğunda (göz simgesi) çalışmaya devam ediyor; telefon görünür görünmez görüntü açılır."
+        a.informativeText = "Telefonda Dikiz uygulamasını aç ve telefonun Mac ile aynı Wi‑Fi'de olduğundan emin ol.\n\nDikiz menü çubuğunda (göz simgesi) çalışmaya devam ediyor; telefon görününce ekranındaki kodu sorar."
         a.addButton(withTitle: "Tamam")
         a.runModal()
     }
